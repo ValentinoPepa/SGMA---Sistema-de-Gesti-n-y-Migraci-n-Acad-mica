@@ -10,7 +10,7 @@
 -- Nombres        : tablas y campos en minúsculas con guion bajo.
 --
 -- Contenido      : 19 tablas, 2 procedimientos de legajo, 1 procedimiento de
---                  auditoría, 11 triggers y datos semilla (roles, parámetros).
+--                  auditoría, 14 triggers y datos semilla (roles, parámetros).
 -- =====================================================================
 
 CREATE DATABASE IF NOT EXISTS gestion_academica
@@ -160,6 +160,7 @@ CREATE TABLE inscripciones (
   id_materia INT NOT NULL,
   id_ciclo INT NOT NULL,
   condicion_cursada ENUM('CURSANDO','REGULAR','PROMOCIONADO','LIBRE') NOT NULL DEFAULT 'CURSANDO',
+  activo BOOLEAN NOT NULL DEFAULT TRUE,          -- anulación = baja lógica
   CONSTRAINT uq_inscripciones UNIQUE (id_alumno, id_materia, id_ciclo),
   CONSTRAINT fk_inscripciones_alumno FOREIGN KEY (id_alumno)
     REFERENCES alumnos (id_alumno) ON DELETE RESTRICT ON UPDATE RESTRICT,
@@ -176,6 +177,7 @@ CREATE TABLE notas_cursada (
   instancia VARCHAR(30) NOT NULL,                -- por ejemplo: 'Parcial 1', 'Recuperatorio 1'
   nota DECIMAL(4,2) NOT NULL,
   fecha DATE NOT NULL,
+  activo BOOLEAN NOT NULL DEFAULT TRUE,          -- anulación = baja lógica
   CONSTRAINT uq_notas_instancia UNIQUE (id_inscripcion, instancia),
   CONSTRAINT chk_notas_rango CHECK (nota BETWEEN 1.00 AND 10.00),
   CONSTRAINT fk_notas_inscripcion FOREIGN KEY (id_inscripcion)
@@ -187,6 +189,7 @@ CREATE TABLE asistencias (
   id_inscripcion INT NOT NULL,
   fecha_clase DATE NOT NULL,
   estado ENUM('PRESENTE','AUSENTE','JUSTIFICADO') NOT NULL,
+  activo BOOLEAN NOT NULL DEFAULT TRUE,          -- anulación = baja lógica
   CONSTRAINT uq_asistencias UNIQUE (id_inscripcion, fecha_clase),
   CONSTRAINT fk_asistencias_inscripcion FOREIGN KEY (id_inscripcion)
     REFERENCES inscripciones (id_inscripcion) ON DELETE RESTRICT ON UPDATE RESTRICT
@@ -202,6 +205,7 @@ CREATE TABLE mesas_examen (
   id_ciclo INT NOT NULL,
   fecha DATE NOT NULL,
   llamado TINYINT NOT NULL DEFAULT 1,
+  activo BOOLEAN NOT NULL DEFAULT TRUE,          -- anulación = baja lógica
   CONSTRAINT uq_mesas UNIQUE (id_materia, fecha, llamado),
   CONSTRAINT chk_mesas_llamado CHECK (llamado >= 1),
   CONSTRAINT fk_mesas_materia FOREIGN KEY (id_materia)
@@ -213,6 +217,7 @@ CREATE TABLE mesas_examen (
 CREATE TABLE inscripciones_examen (
   id_alumno INT NOT NULL,
   id_mesa INT NOT NULL,
+  activo BOOLEAN NOT NULL DEFAULT TRUE,          -- anulación = baja lógica
   PRIMARY KEY (id_alumno, id_mesa),
   CONSTRAINT fk_insc_examen_alumno FOREIGN KEY (id_alumno)
     REFERENCES alumnos (id_alumno) ON DELETE RESTRICT ON UPDATE RESTRICT,
@@ -414,6 +419,10 @@ BEGIN
     CALL sp_auditar('notas_cursada', 'UPDATE', NEW.id_nota, 'nota',
                     CAST(OLD.nota AS CHAR), CAST(NEW.nota AS CHAR));
   END IF;
+  IF OLD.activo <> NEW.activo THEN
+    CALL sp_auditar('notas_cursada', 'UPDATE', NEW.id_nota, 'activo',
+                    CAST(OLD.activo AS CHAR), CAST(NEW.activo AS CHAR));
+  END IF;
 END$$
 
 CREATE TRIGGER trg_notas_ad AFTER DELETE ON notas_cursada FOR EACH ROW
@@ -431,11 +440,53 @@ BEGIN
   IF OLD.estado <> NEW.estado THEN
     CALL sp_auditar('asistencias', 'UPDATE', NEW.id_asistencia, 'estado', OLD.estado, NEW.estado);
   END IF;
+  IF OLD.activo <> NEW.activo THEN
+    CALL sp_auditar('asistencias', 'UPDATE', NEW.id_asistencia, 'activo',
+                    CAST(OLD.activo AS CHAR), CAST(NEW.activo AS CHAR));
+  END IF;
 END$$
 
 CREATE TRIGGER trg_asistencias_ad AFTER DELETE ON asistencias FOR EACH ROW
 BEGIN
   CALL sp_auditar('asistencias', 'DELETE', OLD.id_asistencia, 'estado', OLD.estado, NULL);
+END$$
+
+-- Datos sensibles de alumnos y usuarios: cambios de legajo, DNI, baja, rol y vinculación docente.
+-- (No se audita ultimo_acceso, para no llenar la tabla en cada inicio de sesión.)
+CREATE TRIGGER trg_alumnos_au AFTER UPDATE ON alumnos FOR EACH ROW
+BEGIN
+  IF OLD.legajo <> NEW.legajo THEN
+    CALL sp_auditar('alumnos', 'UPDATE', NEW.id_alumno, 'legajo',
+                    CAST(OLD.legajo AS CHAR), CAST(NEW.legajo AS CHAR));
+  END IF;
+  IF OLD.dni <> NEW.dni THEN
+    CALL sp_auditar('alumnos', 'UPDATE', NEW.id_alumno, 'dni', OLD.dni, NEW.dni);
+  END IF;
+  IF OLD.activo <> NEW.activo THEN
+    CALL sp_auditar('alumnos', 'UPDATE', NEW.id_alumno, 'activo',
+                    CAST(OLD.activo AS CHAR), CAST(NEW.activo AS CHAR));
+  END IF;
+END$$
+
+CREATE TRIGGER trg_usuarios_ai AFTER INSERT ON usuarios FOR EACH ROW
+BEGIN
+  CALL sp_auditar('usuarios', 'INSERT', NEW.id_usuario, 'id_rol', NULL, CAST(NEW.id_rol AS CHAR));
+END$$
+
+CREATE TRIGGER trg_usuarios_au AFTER UPDATE ON usuarios FOR EACH ROW
+BEGIN
+  IF OLD.id_rol <> NEW.id_rol THEN
+    CALL sp_auditar('usuarios', 'UPDATE', NEW.id_usuario, 'id_rol',
+                    CAST(OLD.id_rol AS CHAR), CAST(NEW.id_rol AS CHAR));
+  END IF;
+  IF NOT (OLD.id_docente <=> NEW.id_docente) THEN
+    CALL sp_auditar('usuarios', 'UPDATE', NEW.id_usuario, 'id_docente',
+                    CAST(OLD.id_docente AS CHAR), CAST(NEW.id_docente AS CHAR));
+  END IF;
+  IF OLD.activo <> NEW.activo THEN
+    CALL sp_auditar('usuarios', 'UPDATE', NEW.id_usuario, 'activo',
+                    CAST(OLD.activo AS CHAR), CAST(NEW.activo AS CHAR));
+  END IF;
 END$$
 
 DELIMITER ;
