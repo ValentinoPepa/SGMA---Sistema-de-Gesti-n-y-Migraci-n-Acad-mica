@@ -207,6 +207,7 @@ CREATE TABLE mesas_examen (
   llamado TINYINT NOT NULL DEFAULT 1,
   activo BOOLEAN NOT NULL DEFAULT TRUE,          -- anulación = baja lógica
   CONSTRAINT uq_mesas UNIQUE (id_materia, fecha, llamado),
+  CONSTRAINT uq_mesas_id_materia UNIQUE (id_mesa, id_materia),   -- la referencia la usa actas_examen
   CONSTRAINT chk_mesas_llamado CHECK (llamado >= 1),
   CONSTRAINT fk_mesas_materia FOREIGN KEY (id_materia)
     REFERENCES materias (id_materia) ON DELETE RESTRICT ON UPDATE RESTRICT,
@@ -245,7 +246,8 @@ CREATE TABLE actas_examen (
   id_acta INT AUTO_INCREMENT PRIMARY KEY,
   id_alumno INT NOT NULL,
   id_materia INT NOT NULL,
-  id_mesa INT NULL,                              -- NULL en las actas históricas migradas
+  id_mesa INT NULL,                              -- NULL en las actas históricas migradas; si tiene valor,
+                                                 -- la materia del acta debe ser la de la mesa (FK compuesta)
   fecha_examen DATE NOT NULL,                    -- la migración rechaza filas sin fecha válida
   libro VARCHAR(20) NOT NULL,
   folio VARCHAR(20) NOT NULL,
@@ -263,8 +265,8 @@ CREATE TABLE actas_examen (
     REFERENCES alumnos (id_alumno) ON DELETE RESTRICT ON UPDATE RESTRICT,
   CONSTRAINT fk_actas_materia FOREIGN KEY (id_materia)
     REFERENCES materias (id_materia) ON DELETE RESTRICT ON UPDATE RESTRICT,
-  CONSTRAINT fk_actas_mesa FOREIGN KEY (id_mesa)
-    REFERENCES mesas_examen (id_mesa) ON DELETE RESTRICT ON UPDATE RESTRICT,
+  CONSTRAINT fk_actas_mesa FOREIGN KEY (id_mesa, id_materia)
+    REFERENCES mesas_examen (id_mesa, id_materia) ON DELETE RESTRICT ON UPDATE RESTRICT,
   CONSTRAINT fk_actas_lote FOREIGN KEY (id_lote)
     REFERENCES lotes_carga (id_lote) ON DELETE RESTRICT ON UPDATE RESTRICT
 ) ENGINE=InnoDB;
