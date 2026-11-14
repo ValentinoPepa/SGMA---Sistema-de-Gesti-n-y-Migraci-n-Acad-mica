@@ -1,0 +1,9 @@
+{% extends "base.html" %}
+{% block title %}Inicio · SGMA{% endblock %}
+{% block body %}
+<section class="panel">
+  <h1>Panel académico</h1>
+  <p>Sesión iniciada para el rol <strong>{{ usuario_actual.rol }}</strong>.</p>
+  {% if usuario_actual.rol == 'ADMIN' %}<p><a href="{{ url_for('usuarios') }}">Administrar usuarios y roles</a></p>{% endif %}
+</section>
+{% endblock %}

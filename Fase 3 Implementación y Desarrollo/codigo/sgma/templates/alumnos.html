@@ -1,0 +1,26 @@
+{% extends "base.html" %}
+{% block title %}Alumnos · SGMA{% endblock %}
+{% block body %}
+<h1>Alumnos</h1>
+<section class="panel">
+  <form method="get" class="row"><label for="q">Buscar por DNI o legajo</label><input id="q" name="q" value="{{ busqueda }}"><button type="submit">Buscar</button><a href="{{ url_for('alumnos') }}">Limpiar</a></form>
+</section>
+{% if puede_editar %}<section class="panel">
+  <h2>Alta de alumno</h2>
+  <form method="post"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}"><input type="hidden" name="accion" value="crear">
+    <label for="dni">DNI</label><input id="dni" name="dni" required>
+    <label for="apellido">Apellido</label><input id="apellido" name="apellido" maxlength="50" required>
+    <label for="nombre">Nombre</label><input id="nombre" name="nombre" maxlength="50" required>
+    <label for="fecha">Fecha de nacimiento</label><input id="fecha" name="fecha_nacimiento" type="date">
+    <label for="email">E-mail (opcional)</label><input id="email" name="email" type="email" maxlength="100">
+    <p><button type="submit">Crear alumno</button></p>
+  </form>
+</section>{% endif %}
+<section class="panel"><h2>Registros (máximo 100)</h2>
+  <table><thead><tr><th>Legajo</th><th>DNI</th><th>Apellido y nombre</th><th>E-mail</th><th>Estado</th>{% if puede_editar %}<th></th>{% endif %}</tr></thead><tbody>
+  {% for alumno in alumnos %}<tr><td>{{ alumno.legajo }}</td><td>{{ alumno.dni }}</td><td>{{ alumno.apellido }}, {{ alumno.nombre }}</td><td>{{ alumno.email or '—' }}</td><td>{{ 'Activo' if alumno.activo else 'Inactivo' }}</td>
+    {% if puede_editar %}<td>{% if alumno.activo %}<form method="post"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}"><input type="hidden" name="accion" value="desactivar"><input type="hidden" name="id_alumno" value="{{ alumno.id_alumno }}"><button class="secondary" type="submit">Dar de baja</button></form>{% endif %}</td>{% endif %}</tr>
+  {% else %}<tr><td colspan="6">No hay alumnos para mostrar.</td></tr>{% endfor %}
+  </tbody></table>
+</section>
+{% endblock %}

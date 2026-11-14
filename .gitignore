@@ -1,0 +1,14 @@
+# Entradas con información personal o claves de errores de prueba
+Alumnos_2026_Final.xlsx
+Actas_Historicas.csv
+Clave_Errores_Inyectados.xlsx
+
+# Secretos, logs y artefactos locales
+.env
+.env.*
+!.env.example
+*.log
+__pycache__/
+.pytest_cache/
+.venv/
+venv/

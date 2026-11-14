@@ -1,0 +1,6 @@
+{% extends "base.html" %}
+{% block title %}Docentes · SGMA{% endblock %}
+{% block body %}<h1>Docentes</h1>
+{% if puede_editar %}<section class="panel"><h2>Alta de docente</h2><form method="post"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}"><label for="dni">DNI</label><input id="dni" name="dni" required><label for="apellido">Apellido</label><input id="apellido" name="apellido" maxlength="50" required><label for="nombre">Nombre</label><input id="nombre" name="nombre" maxlength="50" required><label for="email">E-mail</label><input id="email" name="email" type="email" maxlength="100"><p><button type="submit">Crear docente</button></p></form></section>{% endif %}
+<section class="panel"><table><thead><tr><th>Apellido y nombre</th><th>DNI</th><th>E-mail</th><th>Estado</th></tr></thead><tbody>{% for docente in docentes %}<tr><td>{{ docente.apellido }}, {{ docente.nombre }}</td><td>{{ docente.dni }}</td><td>{{ docente.email or '—' }}</td><td>{{ 'Activo' if docente.activo else 'Inactivo' }}</td></tr>{% else %}<tr><td colspan="4">No hay docentes.</td></tr>{% endfor %}</tbody></table></section>
+{% endblock %}

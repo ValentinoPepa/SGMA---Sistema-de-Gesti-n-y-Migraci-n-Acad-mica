@@ -1,0 +1,30 @@
+{% extends "base.html" %}
+{% block title %}Usuarios · SGMA{% endblock %}
+{% block body %}
+<h1>Usuarios y roles</h1>
+<section class="panel">
+  <h2>Crear usuario</h2>
+  <form method="post">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}"><input type="hidden" name="accion" value="crear">
+    <label for="username">Usuario</label><input id="username" name="username" required minlength="3" maxlength="50" autocomplete="off">
+    <label for="password">Contraseña (mínimo 12 caracteres)</label><input id="password" type="password" name="password" required minlength="12" autocomplete="new-password">
+    <label for="rol">Rol</label><select id="rol" name="rol" required>{% for rol in roles %}<option value="{{ rol }}">{{ rol }}</option>{% endfor %}</select>
+    <label for="id_docente">Docente vinculado (obligatorio para DOCENTE)</label>
+    <select id="id_docente" name="id_docente"><option value="">Sin vincular</option>{% for docente in docentes %}<option value="{{ docente.id_docente }}">{{ docente.apellido }}, {{ docente.nombre }} · {{ docente.id_docente }}</option>{% endfor %}</select>
+    <p><button type="submit">Crear cuenta</button></p>
+  </form>
+</section>
+<section class="panel">
+  <h2>Cuentas</h2>
+  <table><thead><tr><th>Usuario</th><th>Rol</th><th>Docente</th><th>Estado</th><th>Acción</th></tr></thead><tbody>
+  {% for cuenta in cuentas %}
+    <tr><td>{{ cuenta.username }}</td><td>{{ cuenta.rol }}</td>
+      <td>{{ (cuenta.docente_apellido ~ ', ' ~ cuenta.docente_nombre) if cuenta.docente_nombre else '—' }}</td>
+      <td>{{ 'Activa' if cuenta.activo else 'Inactiva' }}</td>
+      <td>{% if cuenta.activo and cuenta.id_usuario != usuario_actual.id_usuario %}
+        <form method="post"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}"><input type="hidden" name="accion" value="desactivar"><input type="hidden" name="usuario_id" value="{{ cuenta.id_usuario }}"><button class="secondary" type="submit">Desactivar</button></form>
+      {% else %}—{% endif %}</td></tr>
+  {% else %}<tr><td colspan="5">No hay usuarios para mostrar.</td></tr>{% endfor %}
+  </tbody></table>
+</section>
+{% endblock %}

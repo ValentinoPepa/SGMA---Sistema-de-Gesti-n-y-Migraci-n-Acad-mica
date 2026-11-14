@@ -1,0 +1,14 @@
+{% extends "base.html" %}
+{% block title %}Búsqueda académica · SGMA{% endblock %}
+{% block body %}<h1>Búsqueda académica</h1>
+<section class="panel"><form method="get" class="row"><label for="q">DNI o legajo</label><input id="q" name="q" value="{{ busqueda }}" required><button type="submit">Buscar</button></form></section>
+{% if busqueda and not alumnos %}<div class="notice">No se encontraron alumnos con ese DNI o legajo, o no tiene acceso a sus datos académicos.</div>{% endif %}
+{% for alumno in alumnos %}<section class="panel"><h2>{{ alumno.apellido }}, {{ alumno.nombre }}</h2><p><strong>Legajo:</strong> {{ alumno.legajo }} · <strong>DNI:</strong> {{ alumno.dni }} · <strong>Estado:</strong> {{ 'Activo' if alumno.activo else 'Inactivo' }}</p>
+  {% if usuario_actual.rol in ['ADMIN', 'PRECEPTOR', 'DIRECTIVO'] %}<p><a href="{{ url_for('exportar_analitico_pdf', id_alumno=alumno.id_alumno) }}">Descargar analítico PDF</a> · <a href="{{ url_for('exportar_analitico_excel', id_alumno=alumno.id_alumno) }}">Descargar analítico Excel</a></p>{% endif %}
+  <p><strong>Promedio de cursada:</strong> {{ alumno.promedio_cursada if alumno.promedio_cursada is not none else '—' }} · <strong>Promedio de exámenes:</strong> {{ alumno.promedio_examenes if alumno.promedio_examenes is not none else '—' }} · <strong>Combinado:</strong> {{ alumno.promedio_general if alumno.promedio_general is not none else '—' }}</p>
+  <p>Promedios aritméticos de notas numéricas; las actas de ausente no tienen nota y no entran en el cálculo.</p>
+  <h3>Matrículas</h3><ul>{% for matricula in alumno.matriculas %}<li>{{ matricula.nombre }} · ingreso {{ matricula.anio_ingreso }} · {{ matricula.estado }}</li>{% else %}<li>Sin matrícula cargada.</li>{% endfor %}</ul>
+  <h3>Notas de cursada</h3><table><thead><tr><th>Materia</th><th>Instancia</th><th>Nota</th><th>Fecha</th></tr></thead><tbody>{% for nota in alumno.notas %}<tr><td>{{ nota.codigo }} · {{ nota.materia }}</td><td>{{ nota.instancia }}</td><td>{{ nota.nota }}</td><td>{{ nota.fecha }}</td></tr>{% else %}<tr><td colspan="4">Sin notas de cursada.</td></tr>{% endfor %}</tbody></table>
+  <h3>Actas de examen</h3><table><thead><tr><th>Materia</th><th>Fecha</th><th>Nota</th><th>Estado</th><th>Libro/Folio</th></tr></thead><tbody>{% for acta in alumno.actas %}<tr><td>{{ acta.codigo }} · {{ acta.materia }}</td><td>{{ acta.fecha_examen }}</td><td>{{ acta.nota if acta.nota is not none else '—' }}</td><td>{{ acta.estado }}</td><td>{{ acta.libro }}/{{ acta.folio }}</td></tr>{% else %}<tr><td colspan="5">Sin actas.</td></tr>{% endfor %}</tbody></table>
+</section>{% endfor %}
+{% endblock %}

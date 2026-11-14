@@ -1,0 +1,6 @@
+{% extends "base.html" %}
+{% block title %}Ciclos lectivos · SGMA{% endblock %}
+{% block body %}<h1>Ciclos lectivos</h1>
+{% if puede_editar %}<section class="panel"><h2>Nuevo ciclo</h2><form method="post"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}"><label for="anio">Año</label><input id="anio" name="anio" type="number" min="2000" max="2200" required><label for="inicio">Fecha de inicio</label><input id="inicio" name="fecha_inicio" type="date" required><label for="fin">Fecha de fin</label><input id="fin" name="fecha_fin" type="date" required><p><button type="submit">Crear ciclo</button></p></form></section>{% endif %}
+<section class="panel"><table><thead><tr><th>Año</th><th>Desde</th><th>Hasta</th></tr></thead><tbody>{% for ciclo in ciclos %}<tr><td>{{ ciclo.anio }}</td><td>{{ ciclo.fecha_inicio }}</td><td>{{ ciclo.fecha_fin }}</td></tr>{% else %}<tr><td colspan="3">No hay ciclos lectivos.</td></tr>{% endfor %}</tbody></table></section>
+{% endblock %}

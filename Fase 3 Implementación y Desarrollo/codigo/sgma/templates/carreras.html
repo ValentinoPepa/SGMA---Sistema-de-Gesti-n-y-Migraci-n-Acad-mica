@@ -1,0 +1,6 @@
+{% extends "base.html" %}
+{% block title %}Carreras · SGMA{% endblock %}
+{% block body %}<h1>Carreras</h1>
+{% if puede_editar %}<section class="panel"><h2>Nueva carrera</h2><form method="post"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}"><label for="nombre">Nombre</label><input id="nombre" name="nombre" maxlength="100" required><p><button type="submit">Crear carrera</button></p></form></section>{% endif %}
+<section class="panel"><table><thead><tr><th>Nombre</th><th>Estado</th></tr></thead><tbody>{% for carrera in carreras %}<tr><td>{{ carrera.nombre }}</td><td>{{ 'Activa' if carrera.activa else 'Inactiva' }}</td></tr>{% else %}<tr><td colspan="2">No hay carreras.</td></tr>{% endfor %}</tbody></table></section>
+{% endblock %}
