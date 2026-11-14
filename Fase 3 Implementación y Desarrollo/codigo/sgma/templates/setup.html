@@ -1,0 +1,15 @@
+{% extends "base.html" %}
+{% block title %}Administrador inicial · SGMA{% endblock %}
+{% block body %}
+<section class="panel">
+  <h1>Configuración inicial</h1>
+  <p>Esta pantalla se habilita únicamente cuando todavía no hay usuarios. Cree la primera cuenta ADMIN.</p>
+  <form method="post">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+    <label for="username">Usuario</label><input id="username" name="username" required minlength="3" maxlength="50" autocomplete="username">
+    <label for="password">Contraseña (mínimo 12 caracteres)</label><input id="password" type="password" name="password" required minlength="12" autocomplete="new-password">
+    <label for="confirmar">Repetir contraseña</label><input id="confirmar" type="password" name="confirmar" required minlength="12" autocomplete="new-password">
+    <p><button type="submit">Crear administrador</button></p>
+  </form>
+</section>
+{% endblock %}

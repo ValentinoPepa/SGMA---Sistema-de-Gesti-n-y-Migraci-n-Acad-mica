@@ -1,0 +1,6 @@
+{% extends "base.html" %}
+{% block title %}Carga masiva · SGMA{% endblock %}
+{% block body %}<h1>Carga masiva por plantilla</h1>
+<section class="panel"><h2>Plantillas oficiales</h2><ul>{% for nombre in plantillas %}<li><a href="{{ url_for('descargar_plantilla', nombre=nombre) }}">Descargar {{ nombre }}</a></li>{% endfor %}</ul><p>Complete la hoja Datos y conserve sus encabezados y orden. El archivo se valida antes de procesar filas.</p></section>
+<section class="panel"><h2>Importar archivo</h2><form method="post" enctype="multipart/form-data"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}"><label for="plantilla">Tipo de plantilla</label><select id="plantilla" name="plantilla" required>{% for nombre in plantillas %}<option value="{{ nombre }}">{{ nombre }}</option>{% endfor %}</select><label for="archivo">Archivo .xlsx completado</label><input id="archivo" name="archivo" type="file" accept=".xlsx" required><p><button type="submit">Validar e importar</button></p></form></section>
+{% endblock %}

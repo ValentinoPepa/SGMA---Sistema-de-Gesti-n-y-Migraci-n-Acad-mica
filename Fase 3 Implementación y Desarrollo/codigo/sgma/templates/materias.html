@@ -1,0 +1,6 @@
+{% extends "base.html" %}
+{% block title %}Materias · SGMA{% endblock %}
+{% block body %}<h1>Materias</h1>
+{% if puede_editar %}<section class="panel"><h2>Nueva materia</h2><form method="post"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}"><label for="carrera">Carrera</label><select id="carrera" name="id_carrera" required>{% for carrera in carreras %}<option value="{{ carrera.id_carrera }}">{{ carrera.nombre }}</option>{% endfor %}</select><label for="codigo">Código</label><input id="codigo" name="codigo" maxlength="10" required><label for="nombre">Nombre</label><input id="nombre" name="nombre" maxlength="100" required><label for="anio">Año (1 a 5)</label><input id="anio" name="anio_nivel" type="number" min="1" max="5" required><p><button type="submit">Crear materia</button></p></form></section>{% endif %}
+<section class="panel"><table><thead><tr><th>Carrera</th><th>Código</th><th>Materia</th><th>Año</th><th>Estado</th></tr></thead><tbody>{% for materia in materias %}<tr><td>{{ materia.carrera }}</td><td>{{ materia.codigo }}</td><td>{{ materia.nombre }}</td><td>{{ materia.anio_nivel }}</td><td>{{ 'Activa' if materia.activa else 'Inactiva' }}</td></tr>{% else %}<tr><td colspan="5">No hay materias.</td></tr>{% endfor %}</tbody></table></section>
+{% endblock %}
