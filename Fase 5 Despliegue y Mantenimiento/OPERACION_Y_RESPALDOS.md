@@ -33,6 +33,40 @@ find "$BACKUP_DIR" -type f -name 'gestion_academica_*.sql.gz' -mtime +30 -delete
 
 Programar el script con `cron` o el planificador de la infraestructura, con salida y errores enviados al monitoreo del servidor. El ejemplo retiene 30 días; ajustar esa política con el responsable del sistema. La configuración real, el destino externo y la política de retención dependen del servidor y no se aplican desde este repositorio.
 
+### Windows: fuentes legadas y respaldos de MySQL
+
+Los archivos fuente contienen datos personales. El respaldo debe guardarse en un destino separado de la carpeta del proyecto, con acceso restringido y, preferentemente, en un disco cifrado que no sea el mismo disco del servidor. No agregar respaldos ni archivos de credenciales a Git.
+
+Para hacer una copia verificada de las planillas originales, abrir PowerShell y ejecutar el script con las rutas reales:
+
+```powershell
+powershell.exe -NoProfile -ExecutionPolicy RemoteSigned -File "<repo>\Fase 5 Despliegue y Mantenimiento\scripts\backup_legacy_sources_windows.ps1" -SourceDirectory "<carpeta v1.1 con las fuentes>" -BackupDirectory "<destino separado>"
+```
+
+El script copia las cuatro fuentes esperadas, compara sus hashes SHA-256 y crea un manifiesto. No transforma ni borra las fuentes.
+
+Para respaldar MySQL, crear fuera del repositorio un archivo de opciones, por ejemplo `C:\ProgramData\SGMA\backup.cnf`, con formato MySQL:
+
+```ini
+[client]
+host=127.0.0.1
+port=3306
+user=sgma_backup
+password=CAMBIAR_POR_UN_SECRETO_LOCAL
+```
+
+Reemplazar el ejemplo por un usuario dedicado con los permisos mínimos que requiera la versión de MySQL. Restringir mediante ACL de Windows quién puede leer ese archivo; no guardar la contraseña en el comando, en el repositorio ni en Trello.
+
+Ejecución manual de ejemplo (ajustar todas las rutas):
+
+```powershell
+powershell.exe -NoProfile -ExecutionPolicy RemoteSigned -File "<repo>\Fase 5 Despliegue y Mantenimiento\scripts\backup_mysql_windows.ps1" -BackupDirectory "<destino separado>\mysql" -DefaultsFile "C:\ProgramData\SGMA\backup.cnf" -MySqlDumpPath "<ruta MySQL>\bin\mysqldump.exe" -DatabaseName "gestion_academica" -RetentionDays 30
+```
+
+El script genera un dump con rutinas y triggers, lo comprime, verifica que se pueda leer como SQL y aplica la retención indicada. Para programarlo, crear una tarea en el Programador de tareas de Windows que ejecute el mismo comando una vez al día, con una cuenta que tenga acceso al archivo de opciones, al ejecutable de MySQL y al destino. Configurar el historial de la tarea y revisar su resultado después de cada ejecución.
+
+La verificación de compresión no demuestra que el dump restaure correctamente. Antes de cerrar la tarea de backup, restaurar una copia reciente en una base aislada, comprobar tablas y conteos y registrar fecha, responsable y resultado. Mientras el único destino sea la misma PC, la copia no protege contra la pérdida de ese equipo.
+
 ## Restauración y verificación
 
 Probar la restauración en un entorno aislado antes de depender del respaldo. Para un dump comprimido:
