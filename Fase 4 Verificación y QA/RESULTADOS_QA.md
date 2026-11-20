@@ -52,11 +52,17 @@ Conteos calculados sobre `Fase 2 Diseño y Base de Datos/gestion_academica.sql`:
 
 La inspección confirma que esas declaraciones están escritas en el DDL; no demuestra que el motor instalado las haya creado o esté aplicando correctamente.
 
+## Respaldo MySQL en Windows
+
+El 16 de noviembre de 2026 quedó configurada en esta PC la tarea `SGMA MySQL Daily Backup`, diaria a las 02:00 (hora local), con inicio al volver a estar disponible, retención de 30 días y destino `%LOCALAPPDATA%\SGMA\backups`. La tarea se ejecutó correctamente (`LastTaskResult = 0`) y generó un dump comprimido de 5.335 bytes. Se leyó completamente el flujo gzip de la copia (41.452 bytes descomprimidos), sin errores.
+
+Las credenciales de respaldo están en `%LOCALAPPDATA%\SGMA\secrets\backup.cnf`, fuera del repo y con ACL restringida; MySQL usa la cuenta dedicada `sgma_backup`. El único destino está en esta PC. La integridad gzip no prueba que el dump pueda restaurarse; esa comprobación sigue pendiente.
+
 ## Alcance pendiente para cerrar QA
 
 - Ejecutar pruebas de integridad referencial y restricciones en una base MySQL de QA aislada.
-- Ejecutar la migración completa y pruebas de concurrencia contra MySQL en el servidor destino, midiendo RNF-01, RNF-02 y los RNF-10/11 vigentes. El SRS aprobado con esos requisitos no está identificado entre los archivos locales disponibles.
-- Ejecutar la migración inicial autorizada y reconciliar los datos migrados con las fuentes originales. El ensayo actual no altera la base.
-- Registrar los resultados de restauración de un backup verificado.
+- Ejecutar la migración completa y pruebas de concurrencia contra MySQL, midiendo RNF-01, RNF-02 y los RNF-10/11 definidos por la línea base vigente. Está disponible el informe aprobado v1.0 y el mapeo v1.1; no se encontró el SRS v1.1 aprobado.
+- Ejecutar la migración inicial autorizada y reconciliar los datos migrados con las fuentes originales. La base `gestion_academica` conserva sus datos de demostración: la ejecución `--apply` no llegó a realizarse.
+- Restaurar el backup reciente en una base aislada y registrar los conteos y el resultado.
 
 No se deben cerrar estas comprobaciones usando solo pruebas unitarias, conteos estáticos o datos de demostración.

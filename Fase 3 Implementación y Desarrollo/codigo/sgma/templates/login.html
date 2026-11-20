@@ -1,14 +1,68 @@
 {% extends "base.html" %}
+{% block body_class %}auth-page{% endblock %}
 {% block title %}Ingresar · SGMA{% endblock %}
+{% block extra_styles %}
+<style>
+  body.auth-page { min-height:100vh; color:#17263b; background:radial-gradient(circle at 12% 12%,#2f78b633 0,transparent 28%),linear-gradient(135deg,#0b1d35,#123b65 55%,#17628a); }
+  .auth-page header { display:none; }
+  .auth-page main { display:flex; min-height:100vh; max-width:none; margin:0; padding:clamp(1rem,4vw,3rem); box-sizing:border-box; flex-direction:column; justify-content:center; align-items:center; }
+  .auth-page main > .notice { width:min(100%,960px); box-sizing:border-box; }
+  .login-shell { display:grid; grid-template-columns:1.02fr .98fr; width:min(100%,960px); min-height:560px; overflow:hidden; background:#fff; border:1px solid #ffffff55; border-radius:24px; box-shadow:0 28px 80px #06132666; }
+  .login-welcome { position:relative; isolation:isolate; display:flex; flex-direction:column; justify-content:space-between; overflow:hidden; padding:clamp(2rem,5vw,3.5rem); color:#fff; background:linear-gradient(150deg,#12345a,#15558a 65%,#167498); }
+  .login-welcome::before,.login-welcome::after { position:absolute; z-index:-1; content:""; border:1px solid #ffffff1c; border-radius:50%; }
+  .login-welcome::before { width:360px; height:360px; right:-170px; top:-130px; box-shadow:0 0 0 42px #ffffff08,0 0 0 84px #ffffff06; }
+  .login-welcome::after { width:240px; height:240px; left:-145px; bottom:-130px; box-shadow:0 0 0 35px #ffffff08; }
+  .login-brand { display:flex; align-items:center; gap:.8rem; font-size:1.05rem; font-weight:750; letter-spacing:.02em; }
+  .login-brand-mark { display:grid; width:42px; height:42px; place-items:center; border:1px solid #ffffff55; border-radius:13px; background:#ffffff18; font-size:.83rem; letter-spacing:.08em; }
+  .login-copy { max-width:390px; margin:3rem 0; }
+  .login-eyebrow { margin:0 0 1rem; color:#bfe8ff; font-size:.75rem; font-weight:750; letter-spacing:.16em; text-transform:uppercase; }
+  .login-copy h1 { margin:0; color:#fff; font-size:clamp(2.1rem,4vw,3.15rem); line-height:1.08; letter-spacing:-.04em; }
+  .login-copy p { margin:1.15rem 0 0; color:#d7e9f8; font-size:1rem; line-height:1.7; }
+  .login-features { display:flex; flex-wrap:wrap; gap:.55rem; margin-top:1.6rem; }
+  .login-features span { padding:.55rem .75rem; border:1px solid #ffffff2b; border-radius:999px; background:#ffffff12; color:#f3f9ff; font-size:.82rem; }
+  .login-footer { color:#c7dced; font-size:.8rem; }
+  .login-form-panel { display:flex; flex-direction:column; justify-content:center; padding:clamp(2rem,5vw,4rem); }
+  .login-icon { display:grid; width:48px; height:48px; margin-bottom:1.5rem; place-items:center; border-radius:15px; background:#eaf3fc; color:#1558a6; font-size:1.35rem; }
+  .login-form-panel h2 { margin:0; color:#14253a; font-size:1.85rem; letter-spacing:-.035em; }
+  .login-intro { margin:.55rem 0 1.7rem; color:#64748b; line-height:1.55; }
+  .login-form label { margin:.95rem 0 .4rem; color:#27384d; font-size:.9rem; font-weight:650; }
+  .login-form input { width:100%; max-width:none; min-height:48px; padding:.75rem .9rem; border:1px solid #d4deea; border-radius:10px; background:#fbfdff; transition:border-color .15s,box-shadow .15s,background .15s; }
+  .login-form input:focus { outline:none; border-color:#2876bd; background:#fff; box-shadow:0 0 0 4px #2876bd20; }
+  .login-submit { display:flex; width:100%; min-height:49px; margin-top:1.45rem; align-items:center; justify-content:center; gap:.55rem; border-radius:10px; background:linear-gradient(100deg,#1558a6,#1876ad); box-shadow:0 7px 16px #1558a62b; font-weight:700; transition:transform .15s,box-shadow .15s; }
+  .login-submit:hover { transform:translateY(-1px); box-shadow:0 10px 20px #1558a63b; }
+  .login-help { margin:1.35rem 0 0; color:#718096; font-size:.87rem; line-height:1.6; text-align:center; }
+  .login-help a { color:#1558a6; font-weight:650; text-decoration:none; }
+  .login-help a:hover { text-decoration:underline; }
+  .login-security { display:flex; justify-content:center; gap:.4rem; margin-top:2rem; color:#93a0b1; font-size:.76rem; }
+  @media(max-width:720px) { .auth-page main { padding:1rem; } .login-shell { grid-template-columns:1fr; min-height:0; } .login-welcome { min-height:245px; padding:1.6rem; } .login-copy { margin:2rem 0 0; } .login-copy h1 { max-width:460px; font-size:2rem; } .login-copy p { margin-top:.65rem; font-size:.9rem; } .login-features { margin-top:1rem; } .login-footer { display:none; } .login-form-panel { padding:1.7rem; } .login-icon { margin-bottom:1rem; } }
+</style>
+{% endblock %}
 {% block body %}
-<section class="panel">
-  <h1>Iniciar sesión</h1>
-  <form method="post">
-    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-    <label for="username">Usuario</label><input id="username" name="username" autocomplete="username" required maxlength="50">
-    <label for="password">Contraseña</label><input id="password" type="password" name="password" autocomplete="current-password" required>
-    <p><button type="submit">Ingresar</button></p>
-  </form>
-  <p>¿Es la primera instalación? <a href="{{ url_for('setup') }}">Crear el administrador inicial</a></p>
+<section class="login-shell" aria-label="Acceso al sistema SGMA">
+  <aside class="login-welcome">
+    <div class="login-brand"><span class="login-brand-mark" aria-hidden="true">SG</span><span>SGMA <span aria-hidden="true">·</span> Gestión académica</span></div>
+    <div class="login-copy">
+      <p class="login-eyebrow">Sistema académico</p>
+      <h1>Todo tu recorrido académico, en un solo lugar.</h1>
+      <p>Ingresá para consultar y administrar la información académica de forma clara y ordenada.</p>
+      <div class="login-features" aria-label="Módulos del sistema"><span>Alumnos</span><span>Asistencias</span><span>Actas</span></div>
+    </div>
+    <div class="login-footer">SGMA · Gestión y Migración Académica</div>
+  </aside>
+  <div class="login-form-panel">
+    <div class="login-icon" aria-hidden="true">↗</div>
+    <h2>Bienvenido/a</h2>
+    <p class="login-intro">Ingresá con tu usuario y contraseña para continuar.</p>
+    <form class="login-form" method="post">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+      <label for="username">Usuario</label>
+      <input id="username" name="username" autocomplete="username" required maxlength="50" placeholder="Tu usuario">
+      <label for="password">Contraseña</label>
+      <input id="password" type="password" name="password" autocomplete="current-password" required placeholder="Tu contraseña">
+      <button class="login-submit" type="submit">Ingresar <span aria-hidden="true">→</span></button>
+    </form>
+    <p class="login-help">¿Primera instalación? <a href="{{ url_for('setup') }}">Crear el administrador inicial</a></p>
+    <div class="login-security"><span aria-hidden="true">●</span> Acceso al sistema SGMA</div>
+  </div>
 </section>
 {% endblock %}

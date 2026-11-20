@@ -63,7 +63,7 @@ Ejecución manual de ejemplo (ajustar todas las rutas):
 powershell.exe -NoProfile -ExecutionPolicy RemoteSigned -File "<repo>\Fase 5 Despliegue y Mantenimiento\scripts\backup_mysql_windows.ps1" -BackupDirectory "<destino separado>\mysql" -DefaultsFile "C:\ProgramData\SGMA\backup.cnf" -MySqlDumpPath "<ruta MySQL>\bin\mysqldump.exe" -DatabaseName "gestion_academica" -RetentionDays 30
 ```
 
-El script genera un dump con rutinas y triggers, lo comprime, verifica que se pueda leer como SQL y aplica la retención indicada. Para programarlo, crear una tarea en el Programador de tareas de Windows que ejecute el mismo comando una vez al día, con una cuenta que tenga acceso al archivo de opciones, al ejecutable de MySQL y al destino. Configurar el historial de la tarea y revisar su resultado después de cada ejecución.
+El script genera un dump con rutinas y triggers, lo comprime, verifica que se pueda leer como SQL y aplica la retención indicada. Para programarlo desde PowerShell se puede usar `scripts/register_mysql_backup_task_windows.ps1` con `-BackupDirectory`, `-DefaultsFile` y `-MySqlDumpPath`. Por defecto registra `SGMA MySQL Daily Backup` todos los días a las 02:00 de la hora local, con inicio al volver a estar disponible, y lo ejecuta bajo el usuario actual cuando tiene una sesión abierta. Revisar el resultado de la tarea después de cada ejecución.
 
 La verificación de compresión no demuestra que el dump restaure correctamente. Antes de cerrar la tarea de backup, restaurar una copia reciente en una base aislada, comprobar tablas y conteos y registrar fecha, responsable y resultado. Mientras el único destino sea la misma PC, la copia no protege contra la pérdida de ese equipo.
 
@@ -79,4 +79,4 @@ Validar que las tablas y relaciones estén presentes, revisar conteos representa
 
 ## Límites del paquete actual
 
-La migración definitiva, la prueba real de claves foráneas, rendimiento y concurrencia, y la programación efectiva de respaldos requieren un servidor MySQL, credenciales y una política operativa del entorno de despliegue.
+La migración definitiva, la prueba real de claves foráneas, rendimiento y concurrencia requieren una base MySQL aislada o el servidor destino y los requisitos vigentes. En esta PC ya se registró una tarea de respaldo local; falta probar la restauración. El destino local no cubre la pérdida de la PC.
