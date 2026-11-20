@@ -12,15 +12,18 @@ import sgma.web as web
 
 
 class CursorUsuario:
-    def __init__(self, rol="ADMIN"):
+    def __init__(self, rol="ADMIN", callproc_result=None):
         self.rol = rol
         self.ultima_consulta = ""
         self.consultas = []
+        self.parametros = []
         self.lastrowid = 1
+        self.callproc_result = callproc_result if callproc_result is not None else (1200,)
 
-    def execute(self, consulta, _parametros=None):
+    def execute(self, consulta, parametros=None):
         self.ultima_consulta = consulta
         self.consultas.append(consulta)
+        self.parametros.append(parametros)
         if consulta.lstrip().upper().startswith("INSERT INTO"):
             self.lastrowid += 1
 
@@ -33,7 +36,7 @@ class CursorUsuario:
         return None
 
     def callproc(self, _nombre, _parametros):
-        return (1200,)
+        return self.callproc_result
 
     def fetchall(self):
         return []
@@ -68,11 +71,50 @@ class PermisosYCargaTests(unittest.TestCase):
             respuesta = cliente.get("/usuarios")
         self.assertEqual(respuesta.status_code, 200)
 
+    def test_inicio_muestra_bienvenida_y_accesos_directos(self):
+        cliente, _ = self.crear_cliente("ADMIN")
+        with patch.object(web, "_cursor", return_value=CursorUsuario("ADMIN")):
+            respuesta = cliente.get("/")
+        self.assertEqual(respuesta.status_code, 200)
+        self.assertIn("Accesos directos".encode(), respuesta.data)
+        self.assertIn("Asistencias".encode(), respuesta.data)
+
+    def test_asistencias_muestra_detalle_por_fecha(self):
+        cliente, _ = self.crear_cliente("ADMIN")
+        cursor = CursorUsuario("ADMIN")
+        with patch.object(web, "_cursor", return_value=cursor):
+            respuesta = cliente.get("/asistencias")
+        self.assertEqual(respuesta.status_code, 200)
+        self.assertIn("Detalle por fecha".encode(), respuesta.data)
+        self.assertIn("Todavía no hay asistencias cargadas.".encode(), respuesta.data)
+
     def test_directivo_no_puede_crear_alumnos(self):
         cliente, _ = self.crear_cliente("DIRECTIVO")
         with patch.object(web, "_cursor", return_value=CursorUsuario("DIRECTIVO")):
             respuesta = cliente.post("/alumnos", data={"accion": "crear"})
         self.assertEqual(respuesta.status_code, 403)
+
+    def test_alta_alumno_acepta_legajo_out_como_diccionario(self):
+        cliente, _ = self.crear_cliente("ADMIN")
+        cursor = CursorUsuario(callproc_result={"sp_proximo_legajo_arg1": 1201})
+        conexion = type("ConexionFalsa", (), {"commit": lambda self: None, "rollback": lambda self: None})()
+        with patch.object(web, "_cursor", return_value=cursor), patch.object(web, "_db", return_value=conexion):
+            respuesta = cliente.post(
+                "/alumnos",
+                data={
+                    "csrf_token": "token-prueba",
+                    "accion": "crear",
+                    "dni": "99999999",
+                    "apellido": "Prueba",
+                    "nombre": "Alumno",
+                    "fecha_nacimiento": "",
+                    "email": "",
+                },
+                follow_redirects=False,
+            )
+        self.assertEqual(respuesta.status_code, 302)
+        consulta_insert = next(i for i, sql in enumerate(cursor.consultas) if "INSERT INTO alumnos" in sql)
+        self.assertEqual(cursor.parametros[consulta_insert][0], 1201)
 
     def test_encabezados_incorrectos_rechazan_el_archivo_antes_de_la_base(self):
         libro = Workbook()

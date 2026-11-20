@@ -304,7 +304,14 @@ def create_app(test_config: dict[str, Any] | None = None) -> Flask:
                             # El procedimiento bloquea el contador durante la transacción,
                             # así dos altas simultáneas no reciben el mismo legajo.
                             parametros = cursor.callproc("sp_proximo_legajo", [0])
-                            legajo = parametros[0]
+                            # MySQLCursorDict devuelve los parámetros OUT como
+                            # un diccionario; otros cursores devuelven una tupla.
+                            if isinstance(parametros, dict):
+                                legajo = parametros.get("sp_proximo_legajo_arg1")
+                            else:
+                                legajo = parametros[0]
+                            if legajo is None:
+                                raise RuntimeError("sp_proximo_legajo no devolvió el legajo generado.")
                             cursor.execute(
                                 "INSERT INTO alumnos (legajo, dni, apellido, nombre, fecha_nacimiento, email, origen) "
                                 "VALUES (%s, %s, %s, %s, %s, %s, 'MANUAL')",
@@ -811,6 +818,17 @@ def create_app(test_config: dict[str, Any] | None = None) -> Flask:
                 parametros_docente,
             )
             resumen = cursor.fetchall()
+            cursor.execute(
+                "SELECT x.fecha_clase, x.estado, a.legajo, a.apellido, a.nombre, m.codigo, c.anio "
+                "FROM asistencias x JOIN inscripciones i ON i.id_inscripcion=x.id_inscripcion "
+                "JOIN alumnos a ON a.id_alumno=i.id_alumno "
+                "JOIN materias m ON m.id_materia=i.id_materia "
+                "JOIN ciclos_lectivos c ON c.id_ciclo=i.id_ciclo "
+                "WHERE x.activo=TRUE AND i.activo=TRUE" + filtro_docente + " "
+                "ORDER BY x.fecha_clase DESC, m.codigo, a.apellido, a.nombre LIMIT 500",
+                parametros_docente,
+            )
+            detalle_asistencias = cursor.fetchall()
             cursor.execute("SELECT valor FROM parametros WHERE clave='asistencia_minima'")
             minimo_row = cursor.fetchone()
             minimo = int(minimo_row["valor"]) if minimo_row and str(minimo_row["valor"]).isdigit() else None
@@ -826,6 +844,7 @@ def create_app(test_config: dict[str, Any] | None = None) -> Flask:
             fila["cumple_minimo"] = minimo is None or fila["porcentaje"] is None or fila["porcentaje"] >= minimo
         return render_template(
             "asistencias.html", inscripciones=inscripciones, resumen=resumen,
+            detalle_asistencias=detalle_asistencias,
             puede_cargar=puede_cargar, minimo=minimo, justificada_como_presente=justificada_como_presente,
         )
 
