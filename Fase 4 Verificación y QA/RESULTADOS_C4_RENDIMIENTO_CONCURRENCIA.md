@@ -9,7 +9,7 @@
 
 Se recomienda **mantener activos los triggers de auditoría durante la migración**. En la carga real de 189 actas, la mediana del tramo de escritura y `COMMIT` fue 0.208 s con auditoría y 0.162 s sin el trigger de inserción de actas: una diferencia mediana de 0.046 s (29.4%). La prueba de 1.000 actas generadas para el benchmark dio medianas de 0.762 s y 0.560 s, respectivamente. La auditoría dejó un evento por acta.
 
-No se encontró en el SRS disponible un límite numérico de tiempo para aceptar o rechazar estas mediciones. Por eso la decisión es operativa y provisional: el costo absoluto medido es bajo para estos volúmenes y no justifica perder trazabilidad. No se debe presentar como certificación de SLA.
+El SRS v1.2 adjunto define umbrales: RNF-01 exige menos de 1,5 s en el 95 % de las búsquedas por legajo e historiales; RNF-02 exige procesar 50.000 registros en menos de 10 minutos; RNF-10 propone 5.000 filas de carga masiva en menos de 2 minutos; RNF-11 propone 20 usuarios simultáneos, sin pérdida de datos y con detección de conflictos de edición. Las pruebas de este informe no alcanzan todos esos escenarios, por lo que no se declara cumplimiento formal. La comparación de auditoría sigue siendo útil para la decisión operativa de mantener los triggers.
 
 ## Método
 
@@ -50,12 +50,12 @@ El valor de throughput anterior se expresa en filas de escritura por segundo: 1.
 
 | Requisito / referencia | Evidencia | Estado de evaluación |
 |---|---|---|
-| RNF-01: búsquedas rápidas | La consulta indexada por alumno tuvo p95 de 5.13 ms bajo 10 conexiones concurrentes con auditoría. | Medido en la base; falta un máximo de latencia aprobado para declarar cumplimiento formal. |
-| RNF-02: rendimiento de migración | 189 actas reales: 0.208 s en escritura. El diseño menciona tandas de ejemplo de 1.000 filas; el estrés de 1.000 actas tardó 0.762 s de mediana, con una repetición atípica de 2.609 s. | Medición favorable en mediana; no hay SLA de tiempo. El ETL actual ejecuta un `INSERT` por registro, no una inserción multi-fila en tandas. |
-| RNF-10 | La definición y un umbral para RNF-10 no aparecen en los documentos técnicos disponibles en esta carpeta. | No se certifica cumplimiento hasta contrastarlo con el SRS vigente. |
-| RNF-11: uso simultáneo sin pérdida de cambios | 10 conexiones escribieron 1.000 actas; los conteos finales y la auditoría coincidieron exactamente. | Comportamiento medido en MariaDB local; repetir en el motor/entorno objetivo antes de despliegue. |
+| RNF-01: búsquedas e historiales | La búsqueda indexada por alumno tuvo p95 de 5.13 ms bajo 10 conexiones concurrentes con auditoría. El ensayo no midió la ruta HTTP ni la carga completa del historial. | Evidencia parcial. No demuestra que el 95 % de las búsquedas e historiales de la aplicación responda en menos de 1,5 s. |
+| RNF-02: migración inicial | Se midieron 189 actas reales (0.208 s en escritura) y 1.000 actas sintéticas (0.762 s de mediana de escritura; un outlier de 2.609 s). No se ejecutó un ETL completo de 50.000 registros. | No demostrado. El umbral del SRS es 50.000 registros en menos de 10 minutos; el ETL actual ejecuta un `INSERT` por registro. |
+| RNF-10: carga masiva | El benchmark C4 no procesó una plantilla de 5.000 filas mediante el flujo de carga masiva. | No medido. El umbral propuesto es 5.000 filas en menos de 2 minutos. |
+| RNF-11: concurrencia | 10 conexiones escribieron 1.000 actas; los conteos finales y la auditoría coincidieron. No se probó el flujo con 20 usuarios ni la detección de edición simultánea del mismo registro. | Evidencia parcial. No demuestra el objetivo propuesto de 20 usuarios, ausencia de pérdida y detección de conflictos. |
 
-El diseño del ETL recomienda medir la auditoría y agregar una opción para pausarla solo si RNF-02 no se cumple. Con los tiempos observados, la recomendación es dejarla activa. Si el equipo establece un SLA más estricto o migra un volumen mucho mayor, se debe repetir la prueba con ese objetivo y registrar la decisión.
+El diseño del ETL recomienda medir la auditoría y agregar una opción para pausarla solo si RNF-02 no se cumple. La prueba de 50.000 registros requerida por RNF-02 aún no se realizó; los ensayos disponibles no indican que sea necesario desactivar la auditoría, pero tampoco permiten certificar el umbral. Se recomienda mantener los triggers activos y completar las pruebas de RNF-01, RNF-02, RNF-10 y RNF-11 con los tamaños y condiciones exactos del SRS antes de declarar conformidad.
 
 ## Alcance y reproducibilidad
 
@@ -63,4 +63,4 @@ Los resultados describen una prueba local en MariaDB 10.4.32, no MySQL 8.4 ni un
 
 El código reutilizable del ensayo está en `pruebas/benchmark_c4.py`. Al ejecutarlo, requiere `SGMA_DB_HOST`, `SGMA_DB_USER`, opcionalmente `SGMA_DB_PASSWORD`, `SGMA_DB_PORT`, `SGMA_FUENTES_DIR` y `MYSQL_CLI`. `C4_RUNS`, `C4_WORKERS`, `C4_ROWS_PER_WORKER` y `C4_ETL_ACTS` permiten ajustar repeticiones y volumen. El programa usa esquemas `sgma_c4_*` temporales y los borra al completar.
 
-Fuentes consultadas: matriz de tareas C4; arquitectura ETL (secciones de carga en tandas y decisión de auditoría); DDL v1.2; documento de QA existente; entrevista de requisitos (búsquedas rápidas y concurrencia sin pérdida de cambios).
+Fuentes consultadas: SRS v1.2 adjunto (RNF-01, RNF-02, RNF-10 y RNF-11); matriz de tareas C4; arquitectura ETL; DDL v1.2; entrevista de requisitos.
