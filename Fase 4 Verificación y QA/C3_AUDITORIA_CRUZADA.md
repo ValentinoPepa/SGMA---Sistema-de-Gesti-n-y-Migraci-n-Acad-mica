@@ -17,12 +17,18 @@ El CSV contiene 204 registros de datos (líneas 2 a 205; línea 1 corresponde al
 | Nota fuera de rango, `ERR_04_NOTA_OUT_RANGE` | `NOTA_FUERA_RANGO` | 3 | 83, 135, 183 |
 | **Total** |  | **15** |  |
 
-## Salvedad sobre revisión manual
+## Decisión sobre fechas futuras
 
-La clave indica que las dos fechas futuras (líneas 4 y 82) requieren «revisión manual». El ETL actual las rechaza automáticamente con `ERR_03_DATE_INVALID`; no existe en el flujo una cola, marca ni evidencia de revisión humana. Por eso, el conteo y la clasificación coinciden, pero el tratamiento no cumple por completo lo indicado por la clave para esos dos casos. Debe decidirse si corresponde rechazar ambas fechas sin revisión o incorporar/documentar una revisión manual.
+Para este cierre de C3 se adopta la opción 1: las fechas futuras se rechazan automáticamente con `ERR_03_DATE_INVALID`, tal como hace el ETL. No se realizará una revisión manual de las filas 4 y 82. Se actualizó la copia de trabajo de la clave para reflejar este criterio; el original permanece intacto en la carpeta v1.1.
+
+La copia ajustada esta en `evidencias/C3/Clave_Errores_Inyectados_C3_ajustada.xlsx`. La regla `FECHA_FUTURA` sigue identificando la anomalía y ahora define rechazo automático como tratamiento esperado.
 
 ## Límite de la verificación
 
 Este cruce verifica las filas que el ETL actual prepara o rechaza frente a la clave de anomalías. No se consultó la base MariaDB ni se compararon uno a uno los valores persistidos de las 189 actas con el CSV. Las capturas de Workbench disponibles confirman conteos y el resumen del lote, pero no contienen un volcado fila a fila. Por tanto, queda pendiente esa comparación integral de datos migrados si C3 exige verificar cada valor almacenado.
+
+## Conclusión C3
+
+La correspondencia de las 15 filas rechazadas y el tratamiento acordado para las fechas futuras quedan documentados. Esta revisión no consultó MariaDB ni compara los valores persistidos de las 189 actas uno a uno con el CSV; si la matriz exige esa conciliación integral, sigue siendo una comprobación separada pendiente.
 
 No se incluyeron valores de alumno, DNI ni otros datos personales en este registro.
