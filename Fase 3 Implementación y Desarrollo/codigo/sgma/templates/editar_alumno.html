@@ -1,0 +1,23 @@
+{% extends "base.html" %}
+{% block title %}Editar alumno · SGMA{% endblock %}
+{% block body %}
+<h1>Editar ficha del alumno</h1>
+<section class="panel">
+  <p>Legajo {{ alumno.legajo }}. Si otra persona guarda cambios antes que vos, SGMA te avisará y no sobrescribirá esa versión.</p>
+  <form method="post">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+    <input type="hidden" name="version" value="{{ alumno.version }}">
+    <label for="dni">DNI</label>
+    <input id="dni" name="dni" value="{{ alumno.dni }}" required maxlength="15">
+    <label for="apellido">Apellido</label>
+    <input id="apellido" name="apellido" value="{{ alumno.apellido }}" required maxlength="50">
+    <label for="nombre">Nombre</label>
+    <input id="nombre" name="nombre" value="{{ alumno.nombre }}" required maxlength="50">
+    <label for="fecha_nacimiento">Fecha de nacimiento</label>
+    <input id="fecha_nacimiento" name="fecha_nacimiento" type="date" value="{{ alumno.fecha_nacimiento.isoformat() if alumno.fecha_nacimiento else '' }}">
+    <label for="email">E-mail</label>
+    <input id="email" name="email" type="email" value="{{ alumno.email or '' }}" maxlength="100">
+    <p><button type="submit">Guardar cambios</button> <a href="{{ url_for('alumnos') }}">Cancelar</a></p>
+  </form>
+</section>
+{% endblock %}

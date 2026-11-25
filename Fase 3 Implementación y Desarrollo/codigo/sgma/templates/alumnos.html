@@ -17,9 +17,9 @@
   </form>
 </section>{% endif %}
 <section class="panel"><h2>Registros (máximo 100)</h2>
-  <table><thead><tr><th>Legajo</th><th>DNI</th><th>Apellido y nombre</th><th>E-mail</th><th>Estado</th>{% if puede_editar %}<th></th>{% endif %}</tr></thead><tbody>
+  <table><thead><tr><th>Legajo</th><th>DNI</th><th>Apellido y nombre</th><th>E-mail</th><th>Estado</th>{% if puede_editar %}<th>Acciones</th>{% endif %}</tr></thead><tbody>
   {% for alumno in alumnos %}<tr><td>{{ alumno.legajo }}</td><td>{{ alumno.dni }}</td><td>{{ alumno.apellido }}, {{ alumno.nombre }}</td><td>{{ alumno.email or '—' }}</td><td>{{ 'Activo' if alumno.activo else 'Inactivo' }}</td>
-    {% if puede_editar %}<td>{% if alumno.activo %}<form method="post"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}"><input type="hidden" name="accion" value="desactivar"><input type="hidden" name="id_alumno" value="{{ alumno.id_alumno }}"><button class="secondary" type="submit">Dar de baja</button></form>{% endif %}</td>{% endif %}</tr>
+    {% if puede_editar %}<td>{% if alumno.activo %}<a href="{{ url_for('editar_alumno', id_alumno=alumno.id_alumno) }}">Editar</a> <form method="post"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}"><input type="hidden" name="accion" value="desactivar"><input type="hidden" name="id_alumno" value="{{ alumno.id_alumno }}"><button class="secondary" type="submit">Dar de baja</button></form>{% endif %}</td>{% endif %}</tr>
   {% else %}<tr><td colspan="6">No hay alumnos para mostrar.</td></tr>{% endfor %}
   </tbody></table>
 </section>

@@ -1,0 +1,9 @@
+{% extends "base.html" %}
+{% block title %}Conflicto de edición · SGMA{% endblock %}
+{% block body %}
+<h1>Conflicto de edición</h1>
+<section class="panel">
+  <p role="alert">Otra sesión guardó cambios en esta ficha, o el alumno dejó de estar activo. Tus datos no se aplicaron. Volvé a abrir la ficha para revisar la versión actual antes de editarla.</p>
+  <p><a href="{{ regreso }}">Abrir la ficha actual</a> · <a href="{{ url_for('alumnos') }}">Volver a Alumnos</a></p>
+</section>
+{% endblock %}
