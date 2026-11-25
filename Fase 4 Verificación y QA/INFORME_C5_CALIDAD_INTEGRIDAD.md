@@ -60,6 +60,8 @@ La vista previa del ETL había preparado 80 alumnos, 2 carreras, 24 materias y 1
 
 La fila del lote de `Actas_Historicas.csv` registra 204 filas de origen, 189 correctas y 15 con error. La diferencia coincide con la clave: se omitieron 3 alumnos con DNI duplicado, 1 materia duplicada y 15 actas con referencias inexistentes, fechas inválidas/futuras o notas fuera de rango. Las anomalías de correo y fecha de nacimiento de alumnos se registraron sin descartar esos alumnos.
 
+La preparación de solo lectura del ETL actual confirmó que las 15 líneas rechazadas coinciden exactamente con las anomalías bloqueantes de `Clave_Errores_Inyectados.xlsx`: 4 referencias a alumno inexistente, 4 a materia inexistente, 4 fechas inválidas o futuras y 3 notas fuera de rango. La clave pide revisión manual para las dos fechas futuras; el ETL las rechaza automáticamente, por lo que ese tratamiento queda pendiente de decisión. Este cruce no consultó los valores almacenados en MariaDB; las capturas disponibles confirman conteos y lote, no una comparación persistida fila a fila. El detalle anonimizado está en [C3_AUDITORIA_CRUZADA.md](C3_AUDITORIA_CRUZADA.md).
+
 La base operativa quedó con 80 alumnos, 2 carreras, 24 materias, 189 actas, 190 eventos de auditoría y un lote de migración. La captura de Workbench aportada por la persona usuaria confirma las filas de las cuatro tablas y el resumen del lote.
 
 **Evidencia 4.** Conteos de entidades migradas en Workbench:
