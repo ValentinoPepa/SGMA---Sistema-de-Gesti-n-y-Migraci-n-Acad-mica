@@ -1,6 +1,12 @@
 # Código SGMA
 
-Implementación Python del proyecto, alineada con los artefactos de `v1.1`.
+## Stack tecnológico
+
+- **Base de datos objetivo:** MySQL 8.0.16 o superior, motor InnoDB (DDL y restricciones `CHECK`).
+- **Aplicación web:** Python con Flask 3.x; acceso a la base mediante `mysql-connector-python`.
+- **Entorno de verificación:** algunas pruebas de integración y rendimiento se ejecutaron localmente en MariaDB 10.4.32; esos resultados se identifican como MariaDB y no como MySQL.
+
+Implementación Python del proyecto, alineada con los artefactos vigentes de Fase 2 v1.2.
 
 Consultar el [manual de usuario](../../Fase%205%20Despliegue%20y%20Mantenimiento/MANUAL_DE_USUARIO.md)
 y la [guía de operación y respaldos](../../Fase%205%20Despliegue%20y%20Mantenimiento/OPERACION_Y_RESPALDOS.md).
@@ -59,6 +65,11 @@ python -m flask --app sgma.web:app run
 Abrir `http://127.0.0.1:5000/setup` para crear la primera cuenta ADMIN; la ruta
 se bloquea automáticamente después de crear el primer usuario. En producción,
 configurar además `SGMA_COOKIE_SECURE=true` y servir el panel detrás de HTTPS.
+
+Para una base existente que ya tiene el DDL anterior, antes de usar la edición de
+alumnos ejecutar una sola vez `../../Fase 2 Diseño y Base de Datos/migracion_rnf11_version_alumno.sql`
+en Workbench con la base SGMA correcta seleccionada. Las instalaciones nuevas
+reciben la columna de versión desde `gestion_academica.sql`.
 
 El porcentaje de asistencia usa `asistencia_minima` en la tabla `parametros`.
 Las clases `JUSTIFICADO` se excluyen del denominador, según la regla acordada.
