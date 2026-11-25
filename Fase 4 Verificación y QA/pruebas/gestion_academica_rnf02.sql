@@ -134,6 +134,7 @@ CREATE TABLE alumnos (
   fecha_nacimiento DATE NULL,
   email VARCHAR(100) NULL,
   activo BOOLEAN NOT NULL DEFAULT TRUE,          -- borrado lógico
+  version INT NOT NULL DEFAULT 1,                -- control optimista de ediciones concurrentes
   origen ENUM('MANUAL','MASIVA','MIGRACION') NOT NULL DEFAULT 'MANUAL',
   creado_en DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
   CONSTRAINT uq_alumnos_legajo UNIQUE (legajo),  -- el UNIQUE ya crea el índice
@@ -469,6 +470,15 @@ BEGIN
   END IF;
   IF OLD.dni <> NEW.dni THEN
     CALL sp_auditar('alumnos', 'UPDATE', NEW.id_alumno, 'dni', OLD.dni, NEW.dni);
+  END IF;
+  IF OLD.nombre <> NEW.nombre THEN
+    CALL sp_auditar('alumnos', 'UPDATE', NEW.id_alumno, 'nombre', OLD.nombre, NEW.nombre);
+  END IF;
+  IF OLD.apellido <> NEW.apellido THEN
+    CALL sp_auditar('alumnos', 'UPDATE', NEW.id_alumno, 'apellido', OLD.apellido, NEW.apellido);
+  END IF;
+  IF NOT (OLD.email <=> NEW.email) THEN
+    CALL sp_auditar('alumnos', 'UPDATE', NEW.id_alumno, 'email', OLD.email, NEW.email);
   END IF;
   IF OLD.activo <> NEW.activo THEN
     CALL sp_auditar('alumnos', 'UPDATE', NEW.id_alumno, 'activo',
