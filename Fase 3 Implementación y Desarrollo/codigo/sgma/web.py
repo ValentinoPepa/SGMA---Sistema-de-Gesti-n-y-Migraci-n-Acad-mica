@@ -304,7 +304,7 @@ def create_app(test_config: dict[str, Any] | None = None) -> Flask:
                             # El procedimiento bloquea el contador durante la transacción,
                             # así dos altas simultáneas no reciben el mismo legajo.
                             parametros = cursor.callproc("sp_proximo_legajo", [0])
-                            legajo = parametros[0]
+                            legajo = next(iter(parametros.values())) if isinstance(parametros, dict) else parametros[0]
                             cursor.execute(
                                 "INSERT INTO alumnos (legajo, dni, apellido, nombre, fecha_nacimiento, email, origen) "
                                 "VALUES (%s, %s, %s, %s, %s, %s, 'MANUAL')",
@@ -338,6 +338,83 @@ def create_app(test_config: dict[str, Any] | None = None) -> Flask:
         finally:
             cursor.close()
         return render_template("alumnos.html", alumnos=registros, puede_editar=puede_editar, busqueda=request.args.get("q", ""))
+
+    @app.route("/alumnos/<int:id_alumno>/editar", methods=["GET", "POST"])
+    @requiere_roles("ADMIN", "PRECEPTOR")
+    def editar_alumno(id_alumno: int):
+        cursor = _cursor()
+        try:
+            if request.method == "GET":
+                cursor.execute(
+                    "SELECT id_alumno, legajo, dni, apellido, nombre, fecha_nacimiento, email, version "
+                    "FROM alumnos WHERE id_alumno=%s AND activo=TRUE",
+                    (id_alumno,),
+                )
+                alumno = cursor.fetchone()
+                if not alumno:
+                    abort(404)
+                return render_template("editar_alumno.html", alumno=alumno)
+
+            _validar_csrf()
+            version_texto = request.form.get("version", "")
+            if not version_texto.isdigit() or int(version_texto) < 1:
+                abort(400, description="La versión del formulario no es válida.")
+            version_formulario = int(version_texto)
+
+            cursor.execute(
+                "SELECT id_alumno FROM alumnos WHERE id_alumno=%s AND activo=TRUE",
+                (id_alumno,),
+            )
+            if not cursor.fetchone():
+                abort(404)
+
+            dni = normalizar_dni(request.form.get("dni"))
+            apellido = normalizar_nombre(request.form.get("apellido"), "apellido")
+            nombre = normalizar_nombre(request.form.get("nombre"), "nombre")
+            email = normalizar_email(request.form.get("email"))
+            fecha_texto = request.form.get("fecha_nacimiento", "").strip()
+            fecha = normalizar_fecha(fecha_texto, campo="fecha_nacimiento", no_futura=True) if fecha_texto else None
+            errores = [*dni.errores, *apellido.errores, *nombre.errores, *email.errores]
+            if fecha and not fecha.valido:
+                errores.extend(fecha.errores)
+            if errores:
+                for error in errores:
+                    flash(error.mensaje, "error")
+                return redirect(url_for("editar_alumno", id_alumno=id_alumno))
+
+            cursor.execute(
+                "SELECT id_alumno FROM alumnos WHERE dni=%s AND id_alumno<>%s LIMIT 1",
+                (dni.valor, id_alumno),
+            )
+            if cursor.fetchone():
+                flash("El DNI ya está registrado en otro alumno.", "error")
+                return redirect(url_for("editar_alumno", id_alumno=id_alumno))
+
+            cursor.execute(
+                "UPDATE alumnos SET dni=%s, apellido=%s, nombre=%s, fecha_nacimiento=%s, email=%s, "
+                "version=version+1 WHERE id_alumno=%s AND activo=TRUE AND version=%s",
+                (
+                    dni.valor,
+                    apellido.valor,
+                    nombre.valor,
+                    fecha.valor if fecha else None,
+                    email.valor,
+                    id_alumno,
+                    version_formulario,
+                ),
+            )
+            if cursor.rowcount != 1:
+                _db().rollback()
+                return render_template(
+                    "conflicto_edicion.html",
+                    regreso=url_for("editar_alumno", id_alumno=id_alumno),
+                ), 409
+
+            _db().commit()
+            flash("Ficha del alumno actualizada.", "success")
+            return redirect(url_for("alumnos"))
+        finally:
+            cursor.close()
 
     @app.route("/carreras", methods=["GET", "POST"])
     @requiere_roles("ADMIN", "PRECEPTOR", "DIRECTIVO", "DOCENTE")
@@ -925,9 +1002,10 @@ def create_app(test_config: dict[str, Any] | None = None) -> Flask:
                         if not carrera:
                             errores.agregar(nombre_archivo, numero_fila, "carrera", "ERR_02_FK_NOTFOUND", "La carrera no existe o no está activa.")
                         if not 1900 <= anio_ingreso <= 2200:
-                            errores.agregar(nombre_archivo, numero_fila, "anio_ingreso", None, "El año de ingreso no es válido.")
+                            errores.agregar(nombre_archivo, numero_fila, "anio_ingreso", "ERR_12_DATO_INVALID", "El año de ingreso no es válido.")
                         if len(errores.errores) == cantidad_errores_antes:
-                            legajo = cursor.callproc("sp_proximo_legajo", [0])[0]
+                            parametros = cursor.callproc("sp_proximo_legajo", [0])
+                            legajo = next(iter(parametros.values())) if isinstance(parametros, dict) else parametros[0]
                             cursor.execute(
                                 "INSERT INTO alumnos (legajo,dni,apellido,nombre,fecha_nacimiento,email,origen) VALUES (%s,%s,%s,%s,%s,%s,'MASIVA')",
                                 (legajo, dni.valor, apellido.valor, nombre.valor, fecha.valor if fecha else None, email.valor),
@@ -949,7 +1027,7 @@ def create_app(test_config: dict[str, Any] | None = None) -> Flask:
                             for error in dni.errores:
                                 errores.agregar(nombre_archivo, numero_fila, error.campo, error.codigo, error.mensaje)
                         if condicion not in {"CURSANDO", "REGULAR", "PROMOCIONADO", "LIBRE"} or not 1900 <= anio <= 2200:
-                            errores.agregar(nombre_archivo, numero_fila, "condicion_cursada", None, "Condición o año de ciclo inválido.")
+                            errores.agregar(nombre_archivo, numero_fila, "condicion_cursada", "ERR_12_DATO_INVALID", "Condición o año de ciclo inválido.")
                         cursor.execute("SELECT id_alumno FROM alumnos WHERE dni=%s AND activo=TRUE", (dni.valor,)) if dni.valido else None
                         alumno = cursor.fetchone() if dni.valido else None
                         cursor.execute("SELECT id_materia FROM materias WHERE codigo=%s AND activa=TRUE", (codigo,))
@@ -993,9 +1071,9 @@ def create_app(test_config: dict[str, Any] | None = None) -> Flask:
                             for error in nota.errores:
                                 errores.agregar(nombre_archivo, numero_fila, error.campo, error.codigo, error.mensaje)
                         if not estado:
-                            errores.agregar(nombre_archivo, numero_fila, "condicion", None, "Condición de acta desconocida.")
+                            errores.agregar(nombre_archivo, numero_fila, "condicion", "ERR_12_DATO_INVALID", "Condición de acta desconocida.")
                         if not libro_texto or len(libro_texto) > 20 or not folio_texto or len(folio_texto) > 20:
-                            errores.agregar(nombre_archivo, numero_fila, "libro/folio", None, "Libro y folio son obligatorios y no pueden superar 20 caracteres.")
+                            errores.agregar(nombre_archivo, numero_fila, "libro/folio", "ERR_12_DATO_INVALID", "Libro y folio son obligatorios y no pueden superar 20 caracteres.")
                         alumno = materia = None
                         if dni.valido:
                             cursor.execute("SELECT id_alumno FROM alumnos WHERE dni=%s AND activo=TRUE", (dni.valor,))
@@ -1023,7 +1101,7 @@ def create_app(test_config: dict[str, Any] | None = None) -> Flask:
                     cursor.execute("RELEASE SAVEPOINT fila_carga")
                     if entidad == "alumnos" and "dni" in locals() and dni.valido:
                         dnis_lote.discard(dni.valor)
-                    codigo_error = "ERR_01_DNI_DUP" if entidad == "alumnos" else "VALIDACION"
+                    codigo_error = "ERR_01_DNI_DUP" if entidad == "alumnos" else "ERR_12_DATO_INVALID"
                     errores.agregar(nombre_archivo, numero_fila, "registro", codigo_error, "Restricción de unicidad o integridad; se omitió la fila.")
 
             cursor.execute(

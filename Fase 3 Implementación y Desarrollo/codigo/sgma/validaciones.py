@@ -1,6 +1,6 @@
 """Validaciones compartidas por formularios, cargas masivas y migraciones.
 
-Las reglas se basan en el Diccionario de Datos y Mapeo Legacy v1.1, secciones
+Las reglas se basan en el Diccionario de Datos y Mapeo Legacy v1.2, secciones
 2 y 5. El módulo usa solo la biblioteca estándar y no persiste ni modifica datos.
 """
 
@@ -16,6 +16,7 @@ from typing import Any, Iterable
 _EMAIL_RE = re.compile(r"^[A-Z0-9.!#$%&'*+/=?^_`{|}~-]+@[A-Z0-9](?:[A-Z0-9-]{0,61}[A-Z0-9])?(?:\.[A-Z0-9](?:[A-Z0-9-]{0,61}[A-Z0-9])?)+$", re.IGNORECASE)
 _DNI_SEPARATOR_RE = re.compile(r"[.\-\s]+")
 _DATE_FORMATS = ("%Y-%m-%d", "%d/%m/%Y", "%Y.%m.%d")
+_PARTICULAS_NOMBRE = frozenset({"de", "del", "la", "las", "los", "y", "e", "da", "das", "do", "dos"})
 
 
 @dataclass(frozen=True)
@@ -55,11 +56,11 @@ def normalizar_dni(
     dentro de una misma importación, además de los ya existentes en la BD.
     """
     if valor is None or not str(valor).strip():
-        return _resultado(None, None, "dni", "El DNI es obligatorio.")
+        return _resultado(None, "ERR_10_DNI_INVALID", "dni", "El DNI es obligatorio.")
 
     dni = _DNI_SEPARATOR_RE.sub("", str(valor).strip())
     if not re.fullmatch(r"[0-9]+", dni):
-        return _resultado(None, None, "dni", "El DNI debe contener solo dígitos.")
+        return _resultado(None, "ERR_10_DNI_INVALID", "dni", "El DNI debe contener solo dígitos.")
     if dni_existente or (dnis_del_lote is not None and dni in dnis_del_lote):
         return _resultado(None, "ERR_01_DNI_DUP", "dni", "El DNI ya existe en la base o está repetido en la fuente.")
     if dnis_del_lote is not None:
@@ -67,14 +68,31 @@ def normalizar_dni(
     return ResultadoValidacion(dni)
 
 
+def _capitalizar_palabra(palabra: str) -> str:
+    return re.sub(r"[A-Za-zÁÉÍÓÚÜÑáéíóúüñ]+", lambda m: m.group(0).capitalize(), palabra)
+
+
+def _capitalizar_nombre_propio(texto: str) -> str:
+    """Capitaliza nombres propios manteniendo partículas en minúscula salvo al inicio."""
+    palabras = texto.split()
+    resultado: list[str] = []
+    for indice, palabra in enumerate(palabras):
+        minuscula = palabra.lower()
+        if indice > 0 and minuscula in _PARTICULAS_NOMBRE:
+            resultado.append(minuscula)
+        else:
+            resultado.append(_capitalizar_palabra(minuscula))
+    return " ".join(resultado)
+
+
 def normalizar_nombre(valor: Any, campo: str) -> ResultadoValidacion:
-    """Recorta, capitaliza y limita a 50 caracteres el nombre o apellido."""
-    texto = "" if valor is None else str(valor).strip()
+    """Recorta, capitaliza respetando partículas y limita a 50 caracteres."""
+    texto = re.sub(r"\s+", " ", "" if valor is None else str(valor)).strip()
     if not texto:
-        return _resultado(None, None, campo, f"{campo.capitalize()} no puede estar vacío.")
+        return _resultado(None, "ERR_11_NOMBRE_INVALID", campo, f"{campo.capitalize()} no puede estar vacío.")
     if len(texto) > 50:
-        return _resultado(None, None, campo, f"{campo.capitalize()} no puede superar 50 caracteres.")
-    return ResultadoValidacion(texto.title())
+        return _resultado(None, "ERR_11_NOMBRE_INVALID", campo, f"{campo.capitalize()} no puede superar 50 caracteres.")
+    return ResultadoValidacion(_capitalizar_nombre_propio(texto))
 
 
 def separar_nombre_completo(valor: Any) -> ResultadoValidacion:
@@ -82,7 +100,7 @@ def separar_nombre_completo(valor: Any) -> ResultadoValidacion:
     texto = "" if valor is None else str(valor).strip()
     partes = [parte.strip() for parte in texto.split(",", maxsplit=1)]
     if len(partes) != 2 or not all(partes):
-        return _resultado(None, None, "nombre", "Use el formato 'Apellido, Nombre'.")
+        return _resultado(None, "ERR_11_NOMBRE_INVALID", "nombre", "Use el formato 'Apellido, Nombre'.")
     apellido = normalizar_nombre(partes[0], "apellido")
     nombre = normalizar_nombre(partes[1], "nombre")
     errores = apellido.errores + nombre.errores

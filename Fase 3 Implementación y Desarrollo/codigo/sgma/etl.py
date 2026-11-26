@@ -105,12 +105,12 @@ def transformar_alumnos(archivo: Path, errores: RegistroErrores) -> list[dict[st
             # el resto como apellido, según el formato legado definido en el diccionario.
             partes = _texto(registro.get("Nombre_Y_Apellido")).split()
             if len(partes) < 2:
-                errores.agregar(archivo.name, fila, "nombre", None, "No se puede separar el nombre y el apellido.")
+                errores.agregar(archivo.name, fila, "nombre", "ERR_11_NOMBRE_INVALID", "No se puede separar el nombre y el apellido.")
                 continue
             nombre_resultado = normalizar_nombre(partes[0], "nombre")
             apellido_resultado = normalizar_nombre(" ".join(partes[1:]), "apellido")
             if not nombre_resultado.valido or not apellido_resultado.valido:
-                errores.agregar(archivo.name, fila, "nombre", None, "Nombre o apellido vacío o mayor a 50 caracteres.")
+                errores.agregar(archivo.name, fila, "nombre", "ERR_11_NOMBRE_INVALID", "Nombre o apellido vacío o mayor a 50 caracteres.")
                 continue
             nombre, apellido = nombre_resultado.valor, apellido_resultado.valor
 
@@ -151,16 +151,16 @@ def transformar_plan(archivo: Path, errores: RegistroErrores) -> tuple[list[str]
     carreras: dict[str, str] = {}
     materias: dict[str, dict[str, Any]] = {}
     for fila, registro in _registros_excel(archivo, "Materias"):
-        carrera = re.sub(r"\s+", " ", _texto(registro.get("Nom_Carrera"))).strip().title()
+        carrera = re.sub(r"\s+", " ", _texto(registro.get("Nom_Carrera"))).strip()
         codigo = _codigo_materia(registro.get("Cod_Mat"))
         nombre = re.sub(r"\s+", " ", _texto(registro.get("Nombre_Materia"))).strip().title()
         anio = _anio_nivel(registro.get("Año_Cursada"))
         if not carrera or not codigo or not nombre or anio is None:
-            errores.agregar(archivo.name, fila, "materia", None, "Carrera, código, nombre o año inválido; se omitió la fila.")
+            errores.agregar(archivo.name, fila, "materia", "ERR_12_DATO_INVALID", "Carrera, código, nombre o año inválido; se omitió la fila.")
             continue
         carreras[_clave(carrera)] = carrera
         if codigo in materias:
-            errores.agregar(archivo.name, fila, "Cod_Mat", None, "Materia duplicada en la fuente; se conserva la primera aparición.")
+            errores.agregar(archivo.name, fila, "Cod_Mat", "ERR_12_DATO_INVALID", "Materia duplicada en la fuente; se conserva la primera aparición.")
             continue
         materias[codigo] = {"carrera": carrera, "codigo": codigo, "nombre": nombre, "anio_nivel": anio}
     return list(carreras.values()), list(materias.values())
@@ -178,7 +178,8 @@ def transformar_actas(archivo: Path, dnis: set[str], codigos: set[str], errores:
             dni = normalizar_dni(registro.get("DNI_Alumno"))
             codigo = _codigo_materia(registro.get("Cod_Materia"))
             if not dni.valido:
-                errores.agregar(archivo.name, fila, "DNI_Alumno", "ERR_01_DNI_DUP" if dni.errores and dni.errores[0].codigo else None, "DNI de acta inválido.")
+                codigo_dni = dni.errores[0].codigo if dni.errores and dni.errores[0].codigo else "ERR_10_DNI_INVALID"
+                errores.agregar(archivo.name, fila, "DNI_Alumno", codigo_dni, "DNI de acta inválido.")
                 continue
             if dni.valor not in dnis or codigo not in codigos:
                 faltante = "alumno" if dni.valor not in dnis else "materia"
@@ -201,14 +202,14 @@ def transformar_actas(archivo: Path, dnis: set[str], codigos: set[str], errores:
                 resultado_nota = normalizar_nota(nota_origen)
                 if not resultado_nota.valido or condicion is None:
                     mensaje = resultado_nota.errores[0].mensaje if resultado_nota.errores else "Condición de acta desconocida."
-                    codigo_error = resultado_nota.errores[0].codigo if resultado_nota.errores else None
+                    codigo_error = resultado_nota.errores[0].codigo if resultado_nota.errores else "ERR_12_DATO_INVALID"
                     errores.agregar(archivo.name, fila, "nota/condicion", codigo_error, mensaje)
                     continue
                 nota = resultado_nota.valor
 
             partes_libro_folio = _texto(registro.get("Libro_Folio")).split("-", maxsplit=1)
             if len(partes_libro_folio) != 2 or not all(partes_libro_folio):
-                errores.agregar(archivo.name, fila, "Libro_Folio", None, "El campo debe tener formato libro-folio.")
+                errores.agregar(archivo.name, fila, "Libro_Folio", "ERR_12_DATO_INVALID", "El campo debe tener formato libro-folio.")
                 continue
             salida.append({
                 "dni": dni.valor,
@@ -236,32 +237,92 @@ def _conexion_mysql():
         import mysql.connector
     except ImportError as exc:
         raise RuntimeError("Falta mysql-connector-python. Instale las dependencias de codigo/requirements.txt.") from exc
-    requeridas = ("SGMA_DB_HOST", "SGMA_DB_USER", "SGMA_DB_PASSWORD")
-    faltantes = [nombre for nombre in requeridas if not os.getenv(nombre)]
+    requeridas = ("SGMA_DB_HOST", "SGMA_DB_USER")
+    # An empty password is valid for local development when the database user
+    # has no password configured. Require the variable to be present instead
+    # of requiring its value to be non-empty.
+    faltantes = [nombre for nombre in requeridas if nombre not in os.environ]
     if faltantes:
         raise RuntimeError("Faltan variables de entorno: " + ", ".join(faltantes))
     return mysql.connector.connect(
         host=os.environ["SGMA_DB_HOST"],
         port=int(os.getenv("SGMA_DB_PORT", "3306")),
         user=os.environ["SGMA_DB_USER"],
-        password=os.environ["SGMA_DB_PASSWORD"],
+        password=os.getenv("SGMA_DB_PASSWORD", ""),
         database=os.getenv("SGMA_DB_NAME", "gestion_academica"),
         autocommit=False,
     )
 
 
-def aplicar(alumnos: list[dict[str, Any]], carreras: list[str], materias: list[dict[str, Any]], actas: list[dict[str, Any]], total_actas: int, errores: RegistroErrores) -> None:
-    """Aplica el lote en una transacción; ante una falla se revierte todo."""
+def _totales_fuente() -> tuple[int, int, int]:
+    """Return data-row counts for each source file, excluding headers."""
+    total_alumnos = len(_registros_excel(ARCHIVO_ALUMNOS, "Hoja1"))
+    total_plan = len(_registros_excel(ARCHIVO_PLAN, "Materias"))
+    with ARCHIVO_ACTAS.open("r", encoding="utf-8-sig", newline="") as origen:
+        total_actas = sum(1 for _ in csv.DictReader(origen))
+    return total_alumnos, total_plan, total_actas
+
+
+def aplicar(
+    alumnos: list[dict[str, Any]],
+    carreras: list[str],
+    materias: list[dict[str, Any]],
+    actas: list[dict[str, Any]],
+    total_actas: int,
+    errores: RegistroErrores,
+    *,
+    total_alumnos: int | None = None,
+    total_plan: int | None = None,
+    admin_user_id: int | None = None,
+) -> None:
+    """Apply all three source files in one transaction; rollback on any failure.
+
+    The CLI migration requires an active ADMIN id. ``admin_user_id`` remains
+    optional for isolated technical benchmarks that call this function directly.
+    """
+    if total_alumnos is None or total_plan is None:
+        source_alumnos, source_plan, _ = _totales_fuente()
+        total_alumnos = source_alumnos if total_alumnos is None else total_alumnos
+        total_plan = source_plan if total_plan is None else total_plan
     conexion = _conexion_mysql()
     try:
         cursor = conexion.cursor()
         try:
-            cursor.execute(
-                "SELECT id_lote FROM lotes_carga WHERE tipo = 'MIGRACION' AND entidad = 'actas_examen' AND archivo = %s LIMIT 1",
-                (ARCHIVO_ACTAS.name,),
+            archivos = (
+                (ARCHIVO_ALUMNOS.name, "alumnos", total_alumnos),
+                (ARCHIVO_PLAN.name, "plan_estudios", total_plan),
+                (ARCHIVO_ACTAS.name, "actas_examen", total_actas),
             )
-            if cursor.fetchone():
-                raise RuntimeError("Ya existe una migración de Actas_Historicas.csv; revise el lote antes de volver a ejecutarla.")
+            for archivo, _entidad, _total in archivos:
+                cursor.execute(
+                    "SELECT id_lote FROM lotes_carga WHERE tipo = 'MIGRACION' AND archivo = %s LIMIT 1",
+                    (archivo,),
+                )
+                if cursor.fetchone():
+                    raise RuntimeError(
+                        f"Ya existe un lote de migracion para {archivo}; revise los lotes antes de volver a ejecutar."
+                    )
+
+            if admin_user_id is not None:
+                cursor.execute(
+                    "SELECT u.id_usuario FROM usuarios u "
+                    "JOIN roles r ON r.id_rol = u.id_rol "
+                    "WHERE u.id_usuario = %s AND r.nombre = 'ADMIN' AND u.activo = 1",
+                    (admin_user_id,),
+                )
+                if cursor.fetchone() is None:
+                    raise RuntimeError("SGMA_MIGRACION_USER_ID no corresponde a un usuario ADMIN activo.")
+            cursor.execute("SET @app_user_id = %s", (admin_user_id,))
+
+            lotes: dict[str, int] = {}
+            for archivo, entidad, total in archivos:
+                cursor.execute(
+                    "INSERT INTO lotes_carga "
+                    "(tipo, entidad, id_usuario, archivo, filas_total, filas_ok, filas_error) "
+                    "VALUES ('MIGRACION', %s, %s, %s, %s, 0, 0)",
+                    (entidad, admin_user_id, archivo, total),
+                )
+                lotes[archivo] = cursor.lastrowid
 
             cursor.execute("SELECT id_carrera, nombre FROM carreras")
             id_carreras = {_clave(nombre): id_ for id_, nombre in cursor.fetchall()}
@@ -284,9 +345,10 @@ def aplicar(alumnos: list[dict[str, Any]], carreras: list[str], materias: list[d
             por_dni = {dni: (id_, legajo) for id_, legajo, dni in cursor.fetchall()}
             legajos_existentes = {legajo for _, legajo in por_dni.values()}
             siguiente = max(legajos_existentes, default=0) + 1
+            alumnos_ok = 0
             for alumno in alumnos:
                 if alumno["dni"] in por_dni:
-                    errores.agregar(ARCHIVO_ALUMNOS.name, 0, "dni", "ERR_01_DNI_DUP", "El DNI ya existe en la base; se omitió el alumno.")
+                    errores.agregar(ARCHIVO_ALUMNOS.name, 0, "dni", "ERR_01_DNI_DUP", "El DNI ya existe en la base; se omitio el alumno.")
                     continue
                 legajo = alumno["legajo"]
                 if legajo in legajos_existentes:
@@ -300,28 +362,32 @@ def aplicar(alumnos: list[dict[str, Any]], carreras: list[str], materias: list[d
                 )
                 por_dni[alumno["dni"]] = (cursor.lastrowid, legajo)
                 legajos_existentes.add(legajo)
+                alumnos_ok += 1
 
-            cursor.execute(
-                "INSERT INTO lotes_carga (tipo, entidad, archivo, filas_total, filas_ok, filas_error) VALUES ('MIGRACION', 'actas_examen', %s, %s, 0, 0)",
-                (ARCHIVO_ACTAS.name, total_actas),
-            )
-            id_lote = cursor.lastrowid
+            id_lote_actas = lotes[ARCHIVO_ACTAS.name]
             actas_ok = 0
             for acta in actas:
                 id_alumno = por_dni.get(acta["dni"], (None, None))[0]
                 id_materia = id_materias.get(acta["codigo_materia"])
                 if id_alumno is None or id_materia is None:
-                    errores.agregar(ARCHIVO_ACTAS.name, 0, "referencia", "ERR_02_FK_NOTFOUND", "No se encontró alumno o materia en la base.")
+                    errores.agregar(ARCHIVO_ACTAS.name, 0, "referencia", "ERR_02_FK_NOTFOUND", "No se encontro el alumno o la materia en la base.")
                     continue
                 cursor.execute(
                     "INSERT INTO actas_examen (id_alumno, id_materia, fecha_examen, libro, folio, nota, estado, origen, id_lote) VALUES (%s, %s, %s, %s, %s, %s, %s, 'MIGRACION', %s)",
-                    (id_alumno, id_materia, acta["fecha_examen"], acta["libro"], acta["folio"], acta["nota"], acta["estado"], id_lote),
+                    (id_alumno, id_materia, acta["fecha_examen"], acta["libro"], acta["folio"], acta["nota"], acta["estado"], id_lote_actas),
                 )
                 actas_ok += 1
-            cursor.execute(
-                "UPDATE lotes_carga SET filas_ok = %s, filas_error = %s WHERE id_lote = %s",
-                (actas_ok, max(0, total_actas - actas_ok), id_lote),
+
+            resultados = (
+                (lotes[ARCHIVO_ALUMNOS.name], alumnos_ok, total_alumnos),
+                (lotes[ARCHIVO_PLAN.name], len(materias), total_plan),
+                (id_lote_actas, actas_ok, total_actas),
             )
+            for id_lote, filas_ok, filas_total in resultados:
+                cursor.execute(
+                    "UPDATE lotes_carga SET filas_ok = %s, filas_error = %s WHERE id_lote = %s",
+                    (filas_ok, max(0, filas_total - filas_ok), id_lote),
+                )
             cursor.callproc("sp_sincronizar_legajo")
             conexion.commit()
         except Exception:
@@ -344,9 +410,21 @@ def main() -> int:
     errores = RegistroErrores()
     alumnos, carreras, materias, actas = preparar(errores)
     if args.apply:
-        with ARCHIVO_ACTAS.open("r", encoding="utf-8-sig", newline="") as origen:
-            total_actas = sum(1 for _ in csv.DictReader(origen))
-        aplicar(alumnos, carreras, materias, actas, total_actas, errores)
+        raw_admin_id = os.getenv("SGMA_MIGRACION_USER_ID", "").strip()
+        if not raw_admin_id.isdigit() or int(raw_admin_id) < 1:
+            raise RuntimeError("Defina SGMA_MIGRACION_USER_ID con el ID de un usuario ADMIN activo.")
+        total_alumnos, total_plan, total_actas = _totales_fuente()
+        aplicar(
+            alumnos,
+            carreras,
+            materias,
+            actas,
+            total_actas,
+            errores,
+            total_alumnos=total_alumnos,
+            total_plan=total_plan,
+            admin_user_id=int(raw_admin_id),
+        )
 
     errores.guardar(args.log)
     print(f"Alumnos preparados: {len(alumnos)}")
