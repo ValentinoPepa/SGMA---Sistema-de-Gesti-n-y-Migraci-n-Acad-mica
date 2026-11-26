@@ -7,6 +7,7 @@ import io
 import os
 import re
 import secrets
+import time
 from datetime import datetime, timedelta
 from decimal import Decimal
 from functools import wraps
@@ -14,19 +15,22 @@ from pathlib import Path
 from typing import Any, Callable
 
 import mysql.connector
-from openpyxl import load_workbook
+from openpyxl import Workbook, load_workbook
 from flask import Flask, abort, flash, g, redirect, render_template, request, send_file, send_from_directory, session, url_for
 from werkzeug.security import check_password_hash, generate_password_hash
 
 from .validaciones import normalizar_dni, normalizar_email, normalizar_fecha, normalizar_nombre, normalizar_nota
 from .errores import RegistroErrores
-from .rutas import buscar_carpeta_v11
+from .rutas import resolver_carpeta_plantillas
 
 
 ROLES = ("ADMIN", "PRECEPTOR", "DOCENTE", "DIRECTIVO")
-CARPETA_V11 = buscar_carpeta_v11()
-CARPETA_PLANTILLAS = CARPETA_V11 / "Fase 2 Diseño y Base de Datos"
+CARPETA_PLANTILLAS = resolver_carpeta_plantillas()
 CARPETA_LOGS = Path(__file__).resolve().parents[1] / "logs"
+MAX_FILAS_CARGA_MASIVA = 5000
+MAX_INTENTOS_LOGIN = 5
+DURACION_BLOQUEO_LOGIN_SEGUNDOS = 15 * 60
+INACTIVIDAD_SESION_SEGUNDOS = 30 * 60
 PLANTILLAS_CARGA = {
     "Plantilla_Alumnos.xlsx": ("alumnos", ("dni", "apellido", "nombre", "fecha_nacimiento", "email", "carrera", "anio_ingreso")),
     "Plantilla_Inscripciones.xlsx": ("inscripciones", ("dni_alumno", "codigo_materia", "anio_ciclo", "condicion_cursada")),
@@ -108,17 +112,25 @@ def create_app(test_config: dict[str, Any] | None = None) -> Flask:
         SESSION_COOKIE_HTTPONLY=True,
         SESSION_COOKIE_SAMESITE="Lax",
         SESSION_COOKIE_SECURE=os.getenv("SGMA_COOKIE_SECURE", "false").lower() == "true",
-        PERMANENT_SESSION_LIFETIME=timedelta(hours=8),
+        PERMANENT_SESSION_LIFETIME=timedelta(seconds=INACTIVIDAD_SESION_SEGUNDOS),
         MAX_CONTENT_LENGTH=10 * 1024 * 1024,
     )
     if test_config:
         app.config.update(test_config)
+    intentos_login: dict[str, dict[str, float | int]] = {}
+    app.extensions["intentos_login"] = intentos_login
 
     @app.before_request
     def cargar_usuario():
         g.usuario = None
         usuario_id = session.get("usuario_id")
         if usuario_id is None:
+            return
+        ahora = time.time()
+        ultima_actividad = session.get("ultima_actividad")
+        if ultima_actividad is not None and (ahora - float(ultima_actividad)) > INACTIVIDAD_SESION_SEGUNDOS:
+            session.clear()
+            flash("Su sesión expiró por inactividad.", "error")
             return
         cursor = _cursor()
         try:
@@ -133,6 +145,8 @@ def create_app(test_config: dict[str, Any] | None = None) -> Flask:
             cursor.close()
         if g.usuario is None:
             session.clear()
+        else:
+            session["ultima_actividad"] = ahora
 
     @app.teardown_appcontext
     def cerrar_conexion(_error: BaseException | None) -> None:
@@ -189,6 +203,13 @@ def create_app(test_config: dict[str, Any] | None = None) -> Flask:
             _validar_csrf()
             username = request.form.get("username", "").strip()
             password = request.form.get("password", "")
+            clave_intento = username.lower()
+            ahora = time.time()
+            registro_intento = intentos_login.get(clave_intento) if clave_intento else None
+            if registro_intento and float(registro_intento.get("bloqueado_hasta", 0)) > ahora:
+                flash("Cuenta bloqueada temporalmente por demasiados intentos fallidos. Intente más tarde.", "error")
+                return render_template("login.html"), 429
+
             cursor = _cursor()
             try:
                 cursor.execute(
@@ -200,15 +221,28 @@ def create_app(test_config: dict[str, Any] | None = None) -> Flask:
             finally:
                 cursor.close()
             if cuenta and check_password_hash(cuenta["password_hash"], password):
+                if clave_intento:
+                    intentos_login.pop(clave_intento, None)
                 destino = request.args.get("next", "")
                 # Se permiten únicamente rutas del mismo sitio para evitar redirecciones externas.
                 if not destino.startswith("/") or destino.startswith("//"):
                     destino = url_for("inicio")
                 session.clear()
                 session["usuario_id"] = cuenta["id_usuario"]
+                session["ultima_actividad"] = ahora
                 session.permanent = True
                 _token_csrf()
                 return redirect(destino)
+            if clave_intento:
+                fallos = int(registro_intento["fallos"]) + 1 if registro_intento and float(registro_intento.get("bloqueado_hasta", 0)) <= ahora else 1
+                if fallos >= MAX_INTENTOS_LOGIN:
+                    intentos_login[clave_intento] = {
+                        "fallos": fallos,
+                        "bloqueado_hasta": ahora + DURACION_BLOQUEO_LOGIN_SEGUNDOS,
+                    }
+                    flash("Cuenta bloqueada temporalmente por demasiados intentos fallidos. Intente más tarde.", "error")
+                    return render_template("login.html"), 429
+                intentos_login[clave_intento] = {"fallos": fallos, "bloqueado_hasta": 0.0}
             flash("Usuario o contraseña incorrectos.", "error")
         return render_template("login.html")
 
@@ -276,7 +310,9 @@ def create_app(test_config: dict[str, Any] | None = None) -> Flask:
     @requiere_roles("ADMIN", "PRECEPTOR", "DIRECTIVO", "DOCENTE")
     def alumnos():
         cursor = _cursor()
-        puede_editar = g.usuario["rol"] in {"ADMIN", "PRECEPTOR"}
+        rol = g.usuario["rol"]
+        puede_editar = rol == "PRECEPTOR"
+        es_docente = rol == "DOCENTE"
         try:
             if request.method == "POST":
                 if not puede_editar:
@@ -322,7 +358,28 @@ def create_app(test_config: dict[str, Any] | None = None) -> Flask:
                         return redirect(url_for("alumnos"))
 
             consulta = request.args.get("q", "").strip()
-            if consulta:
+            if es_docente:
+                filtro_docente = (
+                    "EXISTS (SELECT 1 FROM usuarios u "
+                    "JOIN asignaciones_docentes ad ON ad.id_docente = u.id_docente "
+                    "JOIN inscripciones i ON i.id_materia = ad.id_materia AND i.id_ciclo = ad.id_ciclo "
+                    "WHERE u.id_usuario = %s AND i.id_alumno = a.id_alumno AND i.activo = TRUE) AND a.activo = TRUE"
+                )
+                if consulta:
+                    patron = f"%{consulta}%"
+                    cursor.execute(
+                        "SELECT DISTINCT a.id_alumno, a.legajo, a.apellido, a.nombre FROM alumnos a "
+                        "WHERE " + filtro_docente + " AND CAST(a.legajo AS CHAR) LIKE %s "
+                        "ORDER BY a.apellido, a.nombre LIMIT 100",
+                        (g.usuario["id_usuario"], patron),
+                    )
+                else:
+                    cursor.execute(
+                        "SELECT DISTINCT a.id_alumno, a.legajo, a.apellido, a.nombre FROM alumnos a "
+                        "WHERE " + filtro_docente + " ORDER BY a.apellido, a.nombre LIMIT 100",
+                        (g.usuario["id_usuario"],),
+                    )
+            elif consulta:
                 patron = f"%{consulta}%"
                 cursor.execute(
                     "SELECT id_alumno, legajo, dni, apellido, nombre, email, activo FROM alumnos "
@@ -337,10 +394,16 @@ def create_app(test_config: dict[str, Any] | None = None) -> Flask:
             registros = cursor.fetchall()
         finally:
             cursor.close()
-        return render_template("alumnos.html", alumnos=registros, puede_editar=puede_editar, busqueda=request.args.get("q", ""))
+        return render_template(
+            "alumnos.html",
+            alumnos=registros,
+            puede_editar=puede_editar,
+            es_docente=es_docente,
+            busqueda=request.args.get("q", ""),
+        )
 
     @app.route("/alumnos/<int:id_alumno>/editar", methods=["GET", "POST"])
-    @requiere_roles("ADMIN", "PRECEPTOR")
+    @requiere_roles("PRECEPTOR")
     def editar_alumno(id_alumno: int):
         cursor = _cursor()
         try:
@@ -420,7 +483,7 @@ def create_app(test_config: dict[str, Any] | None = None) -> Flask:
     @requiere_roles("ADMIN", "PRECEPTOR", "DIRECTIVO", "DOCENTE")
     def carreras():
         cursor = _cursor()
-        puede_editar = g.usuario["rol"] == "ADMIN"
+        puede_editar = g.usuario["rol"] == "PRECEPTOR"
         try:
             if request.method == "POST":
                 if not puede_editar:
@@ -448,7 +511,7 @@ def create_app(test_config: dict[str, Any] | None = None) -> Flask:
     @requiere_roles("ADMIN", "PRECEPTOR", "DIRECTIVO", "DOCENTE")
     def materias():
         cursor = _cursor()
-        puede_editar = g.usuario["rol"] == "ADMIN"
+        puede_editar = g.usuario["rol"] == "PRECEPTOR"
         try:
             if request.method == "POST":
                 if not puede_editar:
@@ -490,7 +553,7 @@ def create_app(test_config: dict[str, Any] | None = None) -> Flask:
     @requiere_roles("ADMIN", "PRECEPTOR", "DIRECTIVO")
     def docentes():
         cursor = _cursor()
-        puede_editar = g.usuario["rol"] == "ADMIN"
+        puede_editar = g.usuario["rol"] == "PRECEPTOR"
         try:
             if request.method == "POST":
                 if not puede_editar:
@@ -526,7 +589,7 @@ def create_app(test_config: dict[str, Any] | None = None) -> Flask:
     @requiere_roles("ADMIN", "PRECEPTOR", "DIRECTIVO", "DOCENTE")
     def ciclos():
         cursor = _cursor()
-        puede_editar = g.usuario["rol"] in {"ADMIN", "PRECEPTOR"}
+        puede_editar = g.usuario["rol"] == "PRECEPTOR"
         try:
             if request.method == "POST":
                 if not puede_editar:
@@ -561,7 +624,8 @@ def create_app(test_config: dict[str, Any] | None = None) -> Flask:
     def cursadas():
         cursor = _cursor()
         rol = g.usuario["rol"]
-        puede_administrar = rol in {"ADMIN", "PRECEPTOR"}
+        puede_administrar = rol == "PRECEPTOR"
+        puede_cargar = rol in {"PRECEPTOR", "DOCENTE"}
 
         def docente_autorizado(materia_id: int, ciclo_id: int) -> bool:
             cursor.execute("SELECT id_docente FROM usuarios WHERE id_usuario = %s", (g.usuario["id_usuario"],))
@@ -576,6 +640,8 @@ def create_app(test_config: dict[str, Any] | None = None) -> Flask:
 
         try:
             if request.method == "POST":
+                if not puede_cargar:
+                    abort(403)
                 _validar_csrf()
                 accion = request.form.get("accion")
                 if accion == "inscribir_cursada":
@@ -675,7 +741,7 @@ def create_app(test_config: dict[str, Any] | None = None) -> Flask:
                                     _db().rollback()
                                     flash("El alumno ya está inscripto en esa mesa.", "error")
                 elif accion in {"registrar_nota", "registrar_acta"}:
-                    if rol not in {"ADMIN", "PRECEPTOR", "DOCENTE"}:
+                    if not puede_cargar:
                         abort(403)
                     try:
                         if accion == "registrar_nota":
@@ -725,6 +791,14 @@ def create_app(test_config: dict[str, Any] | None = None) -> Flask:
                             mesa_id = int(mesa_id) if mesa_id.isdigit() else None
                             if rol == "DOCENTE" and mesa_id is None:
                                 raise ValueError("El docente debe asociar el acta a una mesa de su materia asignada.")
+                            if rol == "DOCENTE":
+                                cursor.execute(
+                                    "SELECT 1 FROM mesas_examen WHERE id_mesa = %s AND id_materia = %s "
+                                    "AND id_ciclo = %s AND activo = TRUE LIMIT 1",
+                                    (mesa_id, materia_id, ciclo_id),
+                                )
+                                if not cursor.fetchone():
+                                    abort(403)
                             cursor.execute(
                                 "INSERT INTO actas_examen (id_alumno, id_materia, id_mesa, fecha_examen, libro, folio, nota, estado, origen) "
                                 "VALUES (%s, %s, %s, %s, %s, %s, %s, %s, 'MANUAL')",
@@ -809,7 +883,7 @@ def create_app(test_config: dict[str, Any] | None = None) -> Flask:
         return render_template(
             "cursadas.html", materias=materias_opciones, ciclos=ciclos_opciones, mesas=mesas_opciones,
             inscripciones=inscripciones, notas=notas, actas=actas, puede_administrar=puede_administrar,
-            puede_cargar=rol in {"ADMIN", "PRECEPTOR", "DOCENTE"}, rol=rol,
+            puede_cargar=puede_cargar, rol=rol,
         )
 
     @app.route("/asistencias", methods=["GET", "POST"])
@@ -817,7 +891,7 @@ def create_app(test_config: dict[str, Any] | None = None) -> Flask:
     def asistencias():
         cursor = _cursor()
         rol = g.usuario["rol"]
-        puede_cargar = rol in {"ADMIN", "PRECEPTOR", "DOCENTE"}
+        puede_cargar = rol in {"PRECEPTOR", "DOCENTE"}
         try:
             if request.method == "POST":
                 if not puede_cargar:
@@ -911,7 +985,22 @@ def create_app(test_config: dict[str, Any] | None = None) -> Flask:
     def descargar_plantilla(nombre: str):
         if nombre not in PLANTILLAS_CARGA:
             abort(404)
-        return send_from_directory(CARPETA_PLANTILLAS, nombre, as_attachment=True)
+        if CARPETA_PLANTILLAS is not None and (CARPETA_PLANTILLAS / nombre).is_file():
+            return send_from_directory(CARPETA_PLANTILLAS, nombre, as_attachment=True)
+        _, columnas = PLANTILLAS_CARGA[nombre]
+        libro = Workbook()
+        hoja = libro.active
+        hoja.title = "Datos"
+        hoja.append(list(columnas))
+        buffer = io.BytesIO()
+        libro.save(buffer)
+        buffer.seek(0)
+        return send_file(
+            buffer,
+            as_attachment=True,
+            download_name=nombre,
+            mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        )
 
     @app.get("/cargas/errores/<nombre>")
     @requiere_roles("ADMIN", "PRECEPTOR")
@@ -920,27 +1009,10 @@ def create_app(test_config: dict[str, Any] | None = None) -> Flask:
             abort(404)
         return send_from_directory(CARPETA_LOGS, nombre, as_attachment=True)
 
-    @app.route("/cargas", methods=["GET", "POST"])
-    @requiere_roles("ADMIN", "PRECEPTOR")
-    def cargas():
-        if request.method == "GET":
-            return render_template("cargas.html", plantillas=PLANTILLAS_CARGA.keys())
-
-        _validar_csrf()
-        archivo = request.files.get("archivo")
-        if not archivo or not archivo.filename:
-            flash("Seleccione una plantilla .xlsx.", "error")
-            return redirect(url_for("cargas"))
-        nombre_archivo = Path(archivo.filename).name
-        nombre_plantilla = request.form.get("plantilla", "")
-        if nombre_plantilla not in PLANTILLAS_CARGA or Path(nombre_archivo).suffix.lower() != ".xlsx":
-            flash("Use una de las tres plantillas oficiales del SGMA.", "error")
-            return redirect(url_for("cargas"))
-
-        entidad, encabezados_esperados = PLANTILLAS_CARGA[nombre_plantilla]
+    def _leer_plantilla_xlsx(contenido: bytes, nombre_archivo: str, encabezados_esperados: tuple[str, ...]):
         errores = RegistroErrores()
+        libro = load_workbook(io.BytesIO(contenido), read_only=True, data_only=True)
         try:
-            libro = load_workbook(io.BytesIO(archivo.read()), read_only=True, data_only=True)
             if "Datos" not in libro.sheetnames:
                 raise ValueError("Falta la hoja Datos.")
             hoja = libro["Datos"]
@@ -948,19 +1020,262 @@ def create_app(test_config: dict[str, Any] | None = None) -> Flask:
             encabezados = tuple(str(v).strip() if v is not None else "" for v in next(filas))
             if encabezados != encabezados_esperados:
                 errores.agregar(nombre_archivo, 1, "encabezados", "ERR_08_PLANTILLA", "Las columnas u orden no coinciden con la plantilla oficial.")
-                log_path = CARPETA_LOGS / ("errores_masivas_" + datetime.now().strftime("%Y%m%dT%H%M%S") + ".log")
-                errores.guardar(log_path)
-                flash("Archivo rechazado antes de procesar filas: revise los encabezados.", "error")
-                return redirect(url_for("descargar_log", nombre=log_path.name))
+                return None, errores
             datos = [
                 (numero, dict(zip(encabezados, valores)))
                 for numero, valores in enumerate(filas, start=2)
                 if any(valor is not None and str(valor).strip() for valor in valores)
             ]
+        finally:
             libro.close()
+        return datos, errores
+
+    def _validar_fila_carga(
+        cursor: Any,
+        entidad: str,
+        numero_fila: int,
+        registro: dict[str, Any],
+        nombre_archivo: str,
+        errores: RegistroErrores,
+        dnis_lote: set[str],
+    ) -> dict[str, Any] | None:
+        errores_antes = len(errores.errores)
+        if entidad == "alumnos":
+            dni = normalizar_dni(registro.get("dni"), dnis_del_lote=dnis_lote)
+            apellido = normalizar_nombre(registro.get("apellido"), "apellido")
+            nombre = normalizar_nombre(registro.get("nombre"), "nombre")
+            email = normalizar_email(registro.get("email"))
+            fecha_texto = registro.get("fecha_nacimiento")
+            fecha = normalizar_fecha(fecha_texto, campo="fecha_nacimiento", no_futura=True) if fecha_texto else None
+            for resultado in (dni, apellido, nombre, email, fecha):
+                if resultado and not resultado.valido:
+                    for error in resultado.errores:
+                        errores.agregar(nombre_archivo, numero_fila, error.campo, error.codigo, error.mensaje)
+            if dni.valido:
+                cursor.execute("SELECT id_alumno FROM alumnos WHERE dni=%s LIMIT 1", (dni.valor,))
+                if cursor.fetchone():
+                    errores.agregar(nombre_archivo, numero_fila, "dni", "ERR_01_DNI_DUP", "El DNI ya existe en alumnos.")
+            carrera_nombre = str(registro.get("carrera") or "").strip()
+            anio_raw = str(registro.get("anio_ingreso") or "").strip()
+            carrera = None
+            anio_ingreso = None
+            if carrera_nombre:
+                cursor.execute("SELECT id_carrera FROM carreras WHERE LOWER(nombre)=LOWER(%s) AND activa=TRUE", (carrera_nombre,))
+                carrera = cursor.fetchone()
+                if not carrera:
+                    errores.agregar(nombre_archivo, numero_fila, "carrera", "ERR_02_FK_NOTFOUND", "La carrera no existe o no está activa.")
+                try:
+                    anio_ingreso = int(anio_raw)
+                except (TypeError, ValueError):
+                    anio_ingreso = 0
+                if not 1900 <= anio_ingreso <= 2200:
+                    errores.agregar(nombre_archivo, numero_fila, "anio_ingreso", "ERR_12_DATO_INVALID", "El año de ingreso no es válido.")
+            elif anio_raw:
+                try:
+                    anio_prueba = int(anio_raw)
+                except (TypeError, ValueError):
+                    anio_prueba = 0
+                if not 1900 <= anio_prueba <= 2200:
+                    errores.agregar(nombre_archivo, numero_fila, "anio_ingreso", "ERR_12_DATO_INVALID", "El año de ingreso no es válido.")
+            if len(errores.errores) != errores_antes:
+                if dni.valido:
+                    dnis_lote.discard(dni.valor)
+                return None
+            return {
+                "dni": dni.valor,
+                "apellido": apellido.valor,
+                "nombre": nombre.valor,
+                "fecha": fecha.valor if fecha else None,
+                "email": email.valor,
+                "id_carrera": carrera["id_carrera"] if carrera else None,
+                "anio_ingreso": anio_ingreso,
+            }
+
+        if entidad == "inscripciones":
+            dni = normalizar_dni(registro.get("dni_alumno"))
+            codigo = re.sub(r"[\s-]+", "", str(registro.get("codigo_materia") or "")).upper()
+            condicion = str(registro.get("condicion_cursada") or "CURSANDO").strip().upper()
+            try:
+                anio = int(registro.get("anio_ciclo"))
+            except (TypeError, ValueError):
+                anio = 0
+            if not dni.valido:
+                for error in dni.errores:
+                    errores.agregar(nombre_archivo, numero_fila, error.campo, error.codigo, error.mensaje)
+            if condicion not in {"CURSANDO", "REGULAR", "PROMOCIONADO", "LIBRE"} or not 1900 <= anio <= 2200:
+                errores.agregar(nombre_archivo, numero_fila, "condicion_cursada", "ERR_12_DATO_INVALID", "Condición o año de ciclo inválido.")
+            alumno = None
+            if dni.valido:
+                cursor.execute("SELECT id_alumno FROM alumnos WHERE dni=%s AND activo=TRUE", (dni.valor,))
+                alumno = cursor.fetchone()
+            cursor.execute("SELECT id_materia FROM materias WHERE codigo=%s AND activa=TRUE", (codigo,))
+            materia = cursor.fetchone()
+            cursor.execute("SELECT id_ciclo FROM ciclos_lectivos WHERE anio=%s", (anio,))
+            ciclo = cursor.fetchone()
+            if not alumno or not materia or not ciclo:
+                errores.agregar(nombre_archivo, numero_fila, "referencia", "ERR_02_FK_NOTFOUND", "No existe alumno, materia o ciclo lectivo.")
+            if len(errores.errores) == errores_antes and alumno and materia and ciclo:
+                cursor.execute(
+                    "SELECT cr.id_materia_requerida FROM correlatividades cr WHERE cr.id_materia=%s AND NOT EXISTS "
+                    "(SELECT 1 FROM actas_examen ae WHERE ae.id_alumno=%s AND ae.id_materia=cr.id_materia_requerida AND ae.estado='APROBADO' AND ae.activo=TRUE)",
+                    (materia["id_materia"], alumno["id_alumno"]),
+                )
+                if cursor.fetchone():
+                    errores.agregar(nombre_archivo, numero_fila, "codigo_materia", "ERR_06_CORRELATIVA", "Faltan correlativas aprobadas.")
+            if len(errores.errores) != errores_antes or not (alumno and materia and ciclo):
+                return None
+            return {
+                "id_alumno": alumno["id_alumno"],
+                "id_materia": materia["id_materia"],
+                "id_ciclo": ciclo["id_ciclo"],
+                "condicion": condicion,
+            }
+
+        dni = normalizar_dni(registro.get("dni_alumno"))
+        codigo = re.sub(r"[\s-]+", "", str(registro.get("codigo_materia") or "")).upper()
+        fecha = normalizar_fecha(registro.get("fecha_examen"), campo="fecha_examen", no_futura=True)
+        condicion = str(registro.get("condicion") or "").strip().upper()
+        estados = {"APROBADO": "APROBADO", "AP": "APROBADO", "PROM": "APROBADO", "DESAPROBADO": "DESAPROBADO", "DES": "DESAPROBADO", "AUSENTE": "AUSENTE", "A": "AUSENTE"}
+        estado = estados.get(condicion)
+        nota_texto = str(registro.get("nota") or "").strip()
+        libro_texto = str(registro.get("libro") or "").strip()
+        folio_texto = str(registro.get("folio") or "").strip()
+        ausente = estado == "AUSENTE" or nota_texto.upper() in {"A", "AUSENTE"}
+        nota = None if ausente else normalizar_nota(nota_texto)
+        if not dni.valido:
+            for error in dni.errores:
+                errores.agregar(nombre_archivo, numero_fila, error.campo, error.codigo, error.mensaje)
+        if not fecha.valido:
+            for error in fecha.errores:
+                errores.agregar(nombre_archivo, numero_fila, error.campo, error.codigo, error.mensaje)
+        if not ausente and nota and not nota.valido:
+            for error in nota.errores:
+                errores.agregar(nombre_archivo, numero_fila, error.campo, error.codigo, error.mensaje)
+        if not estado:
+            errores.agregar(nombre_archivo, numero_fila, "condicion", "ERR_12_DATO_INVALID", "Condición de acta desconocida.")
+        if not libro_texto or len(libro_texto) > 20 or not folio_texto or len(folio_texto) > 20:
+            errores.agregar(nombre_archivo, numero_fila, "libro/folio", "ERR_12_DATO_INVALID", "Libro y folio son obligatorios y no pueden superar 20 caracteres.")
+        alumno = None
+        if dni.valido:
+            cursor.execute("SELECT id_alumno FROM alumnos WHERE dni=%s AND activo=TRUE", (dni.valor,))
+            alumno = cursor.fetchone()
+        cursor.execute("SELECT id_materia FROM materias WHERE codigo=%s AND activa=TRUE", (codigo,))
+        materia = cursor.fetchone()
+        if not alumno or not materia:
+            errores.agregar(nombre_archivo, numero_fila, "referencia", "ERR_02_FK_NOTFOUND", "No existe alumno o materia.")
+        if len(errores.errores) != errores_antes or not (alumno and materia):
+            return None
+        return {
+            "id_alumno": alumno["id_alumno"],
+            "id_materia": materia["id_materia"],
+            "fecha_examen": fecha.valor,
+            "libro": libro_texto,
+            "folio": folio_texto,
+            "nota": nota.valor if nota else None,
+            "estado": estado,
+        }
+
+    @app.route("/cargas", methods=["GET", "POST"])
+    @requiere_roles("ADMIN", "PRECEPTOR")
+    def cargas():
+        if request.method == "GET":
+            return render_template("cargas.html", plantillas=PLANTILLAS_CARGA.keys(), limite_filas=MAX_FILAS_CARGA_MASIVA)
+
+        _validar_csrf()
+        accion = request.form.get("accion", "").strip()
+        if accion == "cancelar":
+            pendiente = session.pop("carga_pendiente", None)
+            if pendiente and pendiente.get("ruta"):
+                Path(pendiente["ruta"]).unlink(missing_ok=True)
+            flash("Carga masiva cancelada.", "success")
+            return redirect(url_for("cargas"))
+
+        if accion == "confirmar":
+            pendiente = session.pop("carga_pendiente", None)
+            token = request.form.get("token_carga", "")
+            if not pendiente or not hmac.compare_digest(pendiente.get("token", ""), token):
+                flash("La vista previa expiró o no es válida. Vuelva a subir el archivo.", "error")
+                return redirect(url_for("cargas"))
+            ruta_temp = Path(pendiente["ruta"])
+            if not ruta_temp.is_file():
+                flash("El archivo de vista previa ya no está disponible.", "error")
+                return redirect(url_for("cargas"))
+            try:
+                contenido = ruta_temp.read_bytes()
+            finally:
+                ruta_temp.unlink(missing_ok=True)
+            nombre_archivo = pendiente["nombre_archivo"]
+            nombre_plantilla = pendiente["plantilla"]
+        else:
+            archivo = request.files.get("archivo")
+            if not archivo or not archivo.filename:
+                flash("Seleccione una plantilla .xlsx.", "error")
+                return redirect(url_for("cargas"))
+            nombre_archivo = Path(archivo.filename).name
+            nombre_plantilla = request.form.get("plantilla", "")
+            if nombre_plantilla not in PLANTILLAS_CARGA or Path(nombre_archivo).suffix.lower() != ".xlsx":
+                flash("Use una de las tres plantillas oficiales del SGMA.", "error")
+                return redirect(url_for("cargas"))
+            contenido = archivo.read()
+
+        entidad, encabezados_esperados = PLANTILLAS_CARGA[nombre_plantilla]
+        try:
+            datos, errores = _leer_plantilla_xlsx(contenido, nombre_archivo, encabezados_esperados)
         except Exception as error:
             flash(f"No se pudo leer el archivo .xlsx: {error}", "error")
             return redirect(url_for("cargas"))
+
+        if datos is None:
+            CARPETA_LOGS.mkdir(parents=True, exist_ok=True)
+            log_path = CARPETA_LOGS / ("errores_masivas_" + datetime.now().strftime("%Y%m%dT%H%M%S") + ".log")
+            errores.guardar(log_path)
+            flash("Archivo rechazado antes de procesar filas: revise los encabezados.", "error")
+            return redirect(url_for("descargar_log", nombre=log_path.name))
+
+        if len(datos) > MAX_FILAS_CARGA_MASIVA:
+            flash(f"El archivo supera el límite de {MAX_FILAS_CARGA_MASIVA} filas por carga ({len(datos)} filas).", "error")
+            return redirect(url_for("cargas"))
+
+        if accion == "previsualizar":
+            cursor = _cursor()
+            dnis_lote: set[str] = set()
+            filas_ok = 0
+            sin_matricula = 0
+            try:
+                for numero_fila, registro in datos:
+                    preparado = _validar_fila_carga(cursor, entidad, numero_fila, registro, nombre_archivo, errores, dnis_lote)
+                    if preparado is not None:
+                        filas_ok += 1
+                        if entidad == "alumnos" and preparado["id_carrera"] is None:
+                            sin_matricula += 1
+            finally:
+                cursor.close()
+
+            CARPETA_LOGS.mkdir(parents=True, exist_ok=True)
+            anterior = session.pop("carga_pendiente", None)
+            if anterior and anterior.get("ruta"):
+                Path(anterior["ruta"]).unlink(missing_ok=True)
+            token = secrets.token_urlsafe(24)
+            ruta_temp = CARPETA_LOGS / f"preview_{token}.xlsx"
+            ruta_temp.write_bytes(contenido)
+            session["carga_pendiente"] = {
+                "token": token,
+                "ruta": str(ruta_temp),
+                "nombre_archivo": nombre_archivo,
+                "plantilla": nombre_plantilla,
+            }
+            resumen = {
+                "archivo": nombre_archivo,
+                "plantilla": nombre_plantilla,
+                "entidad": entidad,
+                "total": len(datos),
+                "ok": filas_ok,
+                "error": len(datos) - filas_ok,
+                "sin_matricula": sin_matricula,
+                "errores": errores.errores[:20],
+                "token": token,
+            }
+            return render_template("cargas.html", plantillas=PLANTILLAS_CARGA.keys(), limite_filas=MAX_FILAS_CARGA_MASIVA, resumen=resumen)
 
         conexion = _db()
         cursor = _cursor()
@@ -975,132 +1290,43 @@ def create_app(test_config: dict[str, Any] | None = None) -> Flask:
             id_lote = cursor.lastrowid
             for numero_fila, registro in datos:
                 cursor.execute("SAVEPOINT fila_carga")
-                cantidad_errores_antes = len(errores.errores)
                 try:
-                    if entidad == "alumnos":
-                        dni = normalizar_dni(registro.get("dni"), dnis_del_lote=dnis_lote)
-                        apellido = normalizar_nombre(registro.get("apellido"), "apellido")
-                        nombre = normalizar_nombre(registro.get("nombre"), "nombre")
-                        email = normalizar_email(registro.get("email"))
-                        fecha_texto = registro.get("fecha_nacimiento")
-                        fecha = normalizar_fecha(fecha_texto, campo="fecha_nacimiento", no_futura=True) if fecha_texto else None
-                        for resultado in (dni, apellido, nombre, email, fecha):
-                            if resultado and not resultado.valido:
-                                for error in resultado.errores:
-                                    errores.agregar(nombre_archivo, numero_fila, error.campo, error.codigo, error.mensaje)
-                        cursor.execute("SELECT id_alumno FROM alumnos WHERE dni=%s LIMIT 1", (dni.valor,)) if dni.valido else None
-                        existente = cursor.fetchone() if dni.valido else None
-                        if existente:
-                            errores.agregar(nombre_archivo, numero_fila, "dni", "ERR_01_DNI_DUP", "El DNI ya existe en alumnos.")
-                        carrera_nombre = str(registro.get("carrera") or "").strip()
-                        try:
-                            anio_ingreso = int(registro.get("anio_ingreso"))
-                        except (TypeError, ValueError):
-                            anio_ingreso = 0
-                        cursor.execute("SELECT id_carrera FROM carreras WHERE LOWER(nombre)=LOWER(%s) AND activa=TRUE", (carrera_nombre,))
-                        carrera = cursor.fetchone()
-                        if not carrera:
-                            errores.agregar(nombre_archivo, numero_fila, "carrera", "ERR_02_FK_NOTFOUND", "La carrera no existe o no está activa.")
-                        if not 1900 <= anio_ingreso <= 2200:
-                            errores.agregar(nombre_archivo, numero_fila, "anio_ingreso", "ERR_12_DATO_INVALID", "El año de ingreso no es válido.")
-                        if len(errores.errores) == cantidad_errores_antes:
-                            parametros = cursor.callproc("sp_proximo_legajo", [0])
-                            legajo = next(iter(parametros.values())) if isinstance(parametros, dict) else parametros[0]
-                            cursor.execute(
-                                "INSERT INTO alumnos (legajo,dni,apellido,nombre,fecha_nacimiento,email,origen) VALUES (%s,%s,%s,%s,%s,%s,'MASIVA')",
-                                (legajo, dni.valor, apellido.valor, nombre.valor, fecha.valor if fecha else None, email.valor),
-                            )
-                            id_alumno = cursor.lastrowid
-                            cursor.execute(
-                                "INSERT INTO matriculas (id_alumno,id_carrera,anio_ingreso) VALUES (%s,%s,%s)",
-                                (id_alumno, carrera["id_carrera"], anio_ingreso),
-                            )
-                    elif entidad == "inscripciones":
-                        dni = normalizar_dni(registro.get("dni_alumno"))
-                        codigo = re.sub(r"[\s-]+", "", str(registro.get("codigo_materia") or "")).upper()
-                        condicion = str(registro.get("condicion_cursada") or "CURSANDO").strip().upper()
-                        try:
-                            anio = int(registro.get("anio_ciclo"))
-                        except (TypeError, ValueError):
-                            anio = 0
-                        if not dni.valido:
-                            for error in dni.errores:
-                                errores.agregar(nombre_archivo, numero_fila, error.campo, error.codigo, error.mensaje)
-                        if condicion not in {"CURSANDO", "REGULAR", "PROMOCIONADO", "LIBRE"} or not 1900 <= anio <= 2200:
-                            errores.agregar(nombre_archivo, numero_fila, "condicion_cursada", "ERR_12_DATO_INVALID", "Condición o año de ciclo inválido.")
-                        cursor.execute("SELECT id_alumno FROM alumnos WHERE dni=%s AND activo=TRUE", (dni.valor,)) if dni.valido else None
-                        alumno = cursor.fetchone() if dni.valido else None
-                        cursor.execute("SELECT id_materia FROM materias WHERE codigo=%s AND activa=TRUE", (codigo,))
-                        materia = cursor.fetchone()
-                        cursor.execute("SELECT id_ciclo FROM ciclos_lectivos WHERE anio=%s", (anio,))
-                        ciclo = cursor.fetchone()
-                        if not alumno or not materia or not ciclo:
-                            errores.agregar(nombre_archivo, numero_fila, "referencia", "ERR_02_FK_NOTFOUND", "No existe alumno, materia o ciclo lectivo.")
-                        if len(errores.errores) == cantidad_errores_antes and alumno and materia and ciclo:
-                            cursor.execute(
-                                "SELECT cr.id_materia_requerida FROM correlatividades cr WHERE cr.id_materia=%s AND NOT EXISTS "
-                                "(SELECT 1 FROM actas_examen ae WHERE ae.id_alumno=%s AND ae.id_materia=cr.id_materia_requerida AND ae.estado='APROBADO' AND ae.activo=TRUE)",
-                                (materia["id_materia"], alumno["id_alumno"]),
-                            )
-                            if cursor.fetchone():
-                                errores.agregar(nombre_archivo, numero_fila, "codigo_materia", "ERR_06_CORRELATIVA", "Faltan correlativas aprobadas.")
-                            else:
-                                cursor.execute(
-                                    "INSERT INTO inscripciones (id_alumno,id_materia,id_ciclo,condicion_cursada) VALUES (%s,%s,%s,%s)",
-                                    (alumno["id_alumno"], materia["id_materia"], ciclo["id_ciclo"], condicion),
-                                )
-                    else:
-                        dni = normalizar_dni(registro.get("dni_alumno"))
-                        codigo = re.sub(r"[\s-]+", "", str(registro.get("codigo_materia") or "")).upper()
-                        fecha = normalizar_fecha(registro.get("fecha_examen"), campo="fecha_examen", no_futura=True)
-                        condicion = str(registro.get("condicion") or "").strip().upper()
-                        estados = {"APROBADO": "APROBADO", "AP": "APROBADO", "PROM": "APROBADO", "DESAPROBADO": "DESAPROBADO", "DES": "DESAPROBADO", "AUSENTE": "AUSENTE", "A": "AUSENTE"}
-                        estado = estados.get(condicion)
-                        nota_texto = str(registro.get("nota") or "").strip()
-                        libro_texto = str(registro.get("libro") or "").strip()
-                        folio_texto = str(registro.get("folio") or "").strip()
-                        ausente = estado == "AUSENTE" or nota_texto.upper() in {"A", "AUSENTE"}
-                        nota = None if ausente else normalizar_nota(nota_texto)
-                        if not dni.valido:
-                            for error in dni.errores:
-                                errores.agregar(nombre_archivo, numero_fila, error.campo, error.codigo, error.mensaje)
-                        if not fecha.valido:
-                            for error in fecha.errores:
-                                errores.agregar(nombre_archivo, numero_fila, error.campo, error.codigo, error.mensaje)
-                        if not ausente and nota and not nota.valido:
-                            for error in nota.errores:
-                                errores.agregar(nombre_archivo, numero_fila, error.campo, error.codigo, error.mensaje)
-                        if not estado:
-                            errores.agregar(nombre_archivo, numero_fila, "condicion", "ERR_12_DATO_INVALID", "Condición de acta desconocida.")
-                        if not libro_texto or len(libro_texto) > 20 or not folio_texto or len(folio_texto) > 20:
-                            errores.agregar(nombre_archivo, numero_fila, "libro/folio", "ERR_12_DATO_INVALID", "Libro y folio son obligatorios y no pueden superar 20 caracteres.")
-                        alumno = materia = None
-                        if dni.valido:
-                            cursor.execute("SELECT id_alumno FROM alumnos WHERE dni=%s AND activo=TRUE", (dni.valor,))
-                            alumno = cursor.fetchone()
-                        cursor.execute("SELECT id_materia FROM materias WHERE codigo=%s AND activa=TRUE", (codigo,))
-                        materia = cursor.fetchone()
-                        if not alumno or not materia:
-                            errores.agregar(nombre_archivo, numero_fila, "referencia", "ERR_02_FK_NOTFOUND", "No existe alumno o materia.")
-                        if len(errores.errores) == cantidad_errores_antes and alumno and materia:
-                            cursor.execute(
-                                "INSERT INTO actas_examen (id_alumno,id_materia,fecha_examen,libro,folio,nota,estado,origen,id_lote) "
-                                "VALUES (%s,%s,%s,%s,%s,%s,%s,'MASIVA',%s)",
-                                (alumno["id_alumno"], materia["id_materia"], fecha.valor, libro_texto, folio_texto, nota.valor if nota else None, estado, id_lote),
-                            )
-                    if len(errores.errores) == cantidad_errores_antes:
-                        filas_ok += 1
-                        cursor.execute("RELEASE SAVEPOINT fila_carga")
-                    else:
+                    preparado = _validar_fila_carga(cursor, entidad, numero_fila, registro, nombre_archivo, errores, dnis_lote)
+                    if preparado is None:
                         cursor.execute("ROLLBACK TO SAVEPOINT fila_carga")
                         cursor.execute("RELEASE SAVEPOINT fila_carga")
-                        if entidad == "alumnos" and "dni" in locals() and dni.valido:
-                            dnis_lote.discard(dni.valor)
+                        continue
+                    if entidad == "alumnos":
+                        parametros = cursor.callproc("sp_proximo_legajo", [0])
+                        legajo = next(iter(parametros.values())) if isinstance(parametros, dict) else parametros[0]
+                        cursor.execute(
+                            "INSERT INTO alumnos (legajo,dni,apellido,nombre,fecha_nacimiento,email,origen) VALUES (%s,%s,%s,%s,%s,%s,'MASIVA')",
+                            (legajo, preparado["dni"], preparado["apellido"], preparado["nombre"], preparado["fecha"], preparado["email"]),
+                        )
+                        id_alumno = cursor.lastrowid
+                        if preparado["id_carrera"] is not None:
+                            cursor.execute(
+                                "INSERT INTO matriculas (id_alumno,id_carrera,anio_ingreso) VALUES (%s,%s,%s)",
+                                (id_alumno, preparado["id_carrera"], preparado["anio_ingreso"]),
+                            )
+                    elif entidad == "inscripciones":
+                        cursor.execute(
+                            "INSERT INTO inscripciones (id_alumno,id_materia,id_ciclo,condicion_cursada) VALUES (%s,%s,%s,%s)",
+                            (preparado["id_alumno"], preparado["id_materia"], preparado["id_ciclo"], preparado["condicion"]),
+                        )
+                    else:
+                        cursor.execute(
+                            "INSERT INTO actas_examen (id_alumno,id_materia,fecha_examen,libro,folio,nota,estado,origen,id_lote) "
+                            "VALUES (%s,%s,%s,%s,%s,%s,%s,'MASIVA',%s)",
+                            (preparado["id_alumno"], preparado["id_materia"], preparado["fecha_examen"], preparado["libro"], preparado["folio"], preparado["nota"], preparado["estado"], id_lote),
+                        )
+                    filas_ok += 1
+                    cursor.execute("RELEASE SAVEPOINT fila_carga")
                 except mysql.connector.IntegrityError:
                     cursor.execute("ROLLBACK TO SAVEPOINT fila_carga")
                     cursor.execute("RELEASE SAVEPOINT fila_carga")
-                    if entidad == "alumnos" and "dni" in locals() and dni.valido:
-                        dnis_lote.discard(dni.valor)
+                    if entidad == "alumnos":
+                        dnis_lote.discard(str(registro.get("dni") or ""))
                     codigo_error = "ERR_01_DNI_DUP" if entidad == "alumnos" else "ERR_12_DATO_INVALID"
                     errores.agregar(nombre_archivo, numero_fila, "registro", codigo_error, "Restricción de unicidad o integridad; se omitió la fila.")
 
@@ -1130,22 +1356,30 @@ def create_app(test_config: dict[str, Any] | None = None) -> Flask:
         cursor = _cursor()
         query = request.args.get("q", "").strip()
         resultados: list[dict[str, Any]] = []
+        es_docente = g.usuario["rol"] == "DOCENTE"
         try:
             if query:
-                cursor.execute(
-                    "SELECT id_alumno, legajo, dni, apellido, nombre, fecha_nacimiento, email, activo "
-                    "FROM alumnos WHERE dni=%s OR CAST(legajo AS CHAR)=%s ORDER BY apellido,nombre LIMIT 20",
-                    (query, query),
-                )
+                if es_docente:
+                    cursor.execute(
+                        "SELECT id_alumno, legajo, apellido, nombre "
+                        "FROM alumnos WHERE CAST(legajo AS CHAR)=%s AND activo=TRUE ORDER BY apellido,nombre LIMIT 20",
+                        (query,),
+                    )
+                else:
+                    cursor.execute(
+                        "SELECT id_alumno, legajo, dni, apellido, nombre, fecha_nacimiento, email, activo "
+                        "FROM alumnos WHERE dni=%s OR CAST(legajo AS CHAR)=%s ORDER BY apellido,nombre LIMIT 20",
+                        (query, query),
+                    )
                 alumnos_encontrados = cursor.fetchall()
                 id_docente = None
-                if g.usuario["rol"] == "DOCENTE":
+                if es_docente:
                     cursor.execute("SELECT id_docente FROM usuarios WHERE id_usuario=%s", (g.usuario["id_usuario"],))
                     perfil = cursor.fetchone()
                     id_docente = perfil["id_docente"] if perfil else None
 
                 for alumno in alumnos_encontrados:
-                    if g.usuario["rol"] == "DOCENTE":
+                    if es_docente:
                         if not id_docente:
                             continue
                         cursor.execute(
@@ -1156,13 +1390,14 @@ def create_app(test_config: dict[str, Any] | None = None) -> Flask:
                         )
                         if not cursor.fetchone():
                             continue
-
-                    cursor.execute(
-                        "SELECT c.nombre, m.anio_ingreso, m.estado FROM matriculas m "
-                        "JOIN carreras c ON c.id_carrera=m.id_carrera WHERE m.id_alumno=%s ORDER BY m.anio_ingreso",
-                        (alumno["id_alumno"],),
-                    )
-                    alumno["matriculas"] = cursor.fetchall()
+                        alumno["matriculas"] = []
+                    else:
+                        cursor.execute(
+                            "SELECT c.nombre, m.anio_ingreso, m.estado FROM matriculas m "
+                            "JOIN carreras c ON c.id_carrera=m.id_carrera WHERE m.id_alumno=%s ORDER BY m.anio_ingreso",
+                            (alumno["id_alumno"],),
+                        )
+                        alumno["matriculas"] = cursor.fetchall()
 
                     consulta_notas = (
                         "SELECT n.instancia, n.nota, n.fecha, ma.codigo, ma.nombre AS materia "
