@@ -17,7 +17,7 @@ from typing import Any
 from openpyxl import load_workbook
 
 from .errores import RegistroErrores
-from .rutas import buscar_carpeta_v11
+from .rutas import resolver_directorio_fuentes
 from .validaciones import (
     normalizar_dni,
     normalizar_email,
@@ -28,8 +28,7 @@ from .validaciones import (
 )
 
 
-BASE_V11 = buscar_carpeta_v11()
-DIRECTORIO_FUENTES = Path(os.getenv("SGMA_FUENTES_DIR", BASE_V11)).expanduser().resolve()
+DIRECTORIO_FUENTES = resolver_directorio_fuentes()
 ARCHIVO_ALUMNOS = DIRECTORIO_FUENTES / "Alumnos_2026_Final.xlsx"
 ARCHIVO_PLAN = DIRECTORIO_FUENTES / "Plan_Estudios.xlsx"
 ARCHIVO_ACTAS = DIRECTORIO_FUENTES / "Actas_Historicas.csv"
@@ -223,12 +222,35 @@ def transformar_actas(archivo: Path, dnis: set[str], codigos: set[str], errores:
     return salida
 
 
-def preparar(errores: RegistroErrores) -> tuple[list[dict[str, Any]], list[str], list[dict[str, Any]], list[dict[str, Any]]]:
-    carreras, materias = transformar_plan(ARCHIVO_PLAN, errores)
-    alumnos = transformar_alumnos(ARCHIVO_ALUMNOS, errores)
+def _rutas_fuentes(directorio: Path | None = None) -> tuple[Path, Path, Path]:
+    if directorio is None:
+        archivos = (ARCHIVO_ALUMNOS, ARCHIVO_PLAN, ARCHIVO_ACTAS)
+    else:
+        base = directorio.expanduser().resolve()
+        archivos = (
+            base / "Alumnos_2026_Final.xlsx",
+            base / "Plan_Estudios.xlsx",
+            base / "Actas_Historicas.csv",
+        )
+    faltantes = [str(ruta) for ruta in archivos if not ruta.is_file()]
+    if faltantes:
+        raise FileNotFoundError(
+            "Faltan planillas legadas para ejecutar el ETL. "
+            "Configure SGMA_FUENTES_DIR o pase --fuentes-dir. Faltantes: " + ", ".join(faltantes)
+        )
+    return archivos
+
+
+def preparar(
+    errores: RegistroErrores,
+    directorio_fuentes: Path | None = None,
+) -> tuple[list[dict[str, Any]], list[str], list[dict[str, Any]], list[dict[str, Any]]]:
+    archivo_alumnos, archivo_plan, archivo_actas = _rutas_fuentes(directorio_fuentes)
+    carreras, materias = transformar_plan(archivo_plan, errores)
+    alumnos = transformar_alumnos(archivo_alumnos, errores)
     dnis = {fila["dni"] for fila in alumnos}
     codigos = {fila["codigo"] for fila in materias}
-    actas = transformar_actas(ARCHIVO_ACTAS, dnis, codigos, errores)
+    actas = transformar_actas(archivo_actas, dnis, codigos, errores)
     return alumnos, carreras, materias, actas
 
 
@@ -254,11 +276,12 @@ def _conexion_mysql():
     )
 
 
-def _totales_fuente() -> tuple[int, int, int]:
+def _totales_fuente(directorio_fuentes: Path | None = None) -> tuple[int, int, int]:
     """Return data-row counts for each source file, excluding headers."""
-    total_alumnos = len(_registros_excel(ARCHIVO_ALUMNOS, "Hoja1"))
-    total_plan = len(_registros_excel(ARCHIVO_PLAN, "Materias"))
-    with ARCHIVO_ACTAS.open("r", encoding="utf-8-sig", newline="") as origen:
+    archivo_alumnos, archivo_plan, archivo_actas = _rutas_fuentes(directorio_fuentes)
+    total_alumnos = len(_registros_excel(archivo_alumnos, "Hoja1"))
+    total_plan = len(_registros_excel(archivo_plan, "Materias"))
+    with archivo_actas.open("r", encoding="utf-8-sig", newline="") as origen:
         total_actas = sum(1 for _ in csv.DictReader(origen))
     return total_alumnos, total_plan, total_actas
 
@@ -405,15 +428,16 @@ def main() -> int:
     modo.add_argument("--dry-run", action="store_true", help="prepara y valida los datos sin conectarse ni escribir en MySQL (predeterminado)")
     modo.add_argument("--apply", action="store_true", help="inserta datos en MySQL dentro de una transacción")
     parser.add_argument("--log", type=Path, default=LOG_DEFAULT, help="ruta del log de errores")
+    parser.add_argument("--fuentes-dir", type=Path, default=None, help="carpeta con las planillas legadas")
     args = parser.parse_args()
 
     errores = RegistroErrores()
-    alumnos, carreras, materias, actas = preparar(errores)
+    alumnos, carreras, materias, actas = preparar(errores, args.fuentes_dir)
     if args.apply:
         raw_admin_id = os.getenv("SGMA_MIGRACION_USER_ID", "").strip()
         if not raw_admin_id.isdigit() or int(raw_admin_id) < 1:
             raise RuntimeError("Defina SGMA_MIGRACION_USER_ID con el ID de un usuario ADMIN activo.")
-        total_alumnos, total_plan, total_actas = _totales_fuente()
+        total_alumnos, total_plan, total_actas = _totales_fuente(args.fuentes_dir)
         aplicar(
             alumnos,
             carreras,
