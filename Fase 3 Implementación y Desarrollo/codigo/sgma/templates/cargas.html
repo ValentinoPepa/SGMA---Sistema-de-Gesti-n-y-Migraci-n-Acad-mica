@@ -1,6 +1,30 @@
 {% extends "base.html" %}
 {% block title %}Carga masiva · SGMA{% endblock %}
 {% block body %}<h1>Carga masiva por plantilla</h1>
-<section class="panel"><h2>Plantillas oficiales</h2><ul>{% for nombre in plantillas %}<li><a href="{{ url_for('descargar_plantilla', nombre=nombre) }}">Descargar {{ nombre }}</a></li>{% endfor %}</ul><p>Complete la hoja Datos y conserve sus encabezados y orden. El archivo se valida antes de procesar filas.</p></section>
-<section class="panel"><h2>Importar archivo</h2><form method="post" enctype="multipart/form-data"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}"><label for="plantilla">Tipo de plantilla</label><select id="plantilla" name="plantilla" required>{% for nombre in plantillas %}<option value="{{ nombre }}">{{ nombre }}</option>{% endfor %}</select><label for="archivo">Archivo .xlsx completado</label><input id="archivo" name="archivo" type="file" accept=".xlsx" required><p><button type="submit">Validar e importar</button></p></form></section>
+<section class="panel"><h2>Plantillas oficiales</h2><ul>{% for nombre in plantillas %}<li><a href="{{ url_for('descargar_plantilla', nombre=nombre) }}">Descargar {{ nombre }}</a></li>{% endfor %}</ul><p>Complete la hoja Datos y conserve sus encabezados y orden. Máximo {{ limite_filas }} filas por archivo; en alumnos, carrera y anio_ingreso son opcionales.</p></section>
+<section class="panel"><h2>Importar archivo</h2><form method="post" enctype="multipart/form-data"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}"><input type="hidden" name="accion" value="previsualizar"><label for="plantilla">Tipo de plantilla</label><select id="plantilla" name="plantilla" required>{% for nombre in plantillas %}<option value="{{ nombre }}">{{ nombre }}</option>{% endfor %}</select><label for="archivo">Archivo .xlsx completado</label><input id="archivo" name="archivo" type="file" accept=".xlsx" required><p><button type="submit">Previsualizar</button></p></form></section>
+{% if resumen %}
+<section class="panel">
+  <h2>Vista previa antes de confirmar</h2>
+  <p>Archivo: <strong>{{ resumen.archivo }}</strong> ({{ resumen.plantilla }})</p>
+  <ul>
+    <li>Filas totales: <strong>{{ resumen.total }}</strong></li>
+    <li>Filas válidas: <strong>{{ resumen.ok }}</strong></li>
+    <li>Filas con error: <strong>{{ resumen.error }}</strong></li>
+    {% if resumen.entidad == "alumnos" %}<li>Alumnos sin matrícula (sin carrera): <strong>{{ resumen.sin_matricula }}</strong></li>{% endif %}
+  </ul>
+  {% if resumen.errores %}
+  <h3>Primeros errores detectados</h3>
+  <table><thead><tr><th>Fila</th><th>Campo</th><th>Código</th><th>Mensaje</th></tr></thead><tbody>{% for err in resumen.errores %}<tr><td>{{ err.fila }}</td><td>{{ err.campo }}</td><td>{{ err.codigo }}</td><td>{{ err.mensaje }}</td></tr>{% endfor %}</tbody></table>
+  {% endif %}
+  <form method="post">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+    <input type="hidden" name="token_carga" value="{{ resumen.token }}">
+    <p>
+      <button type="submit" name="accion" value="confirmar">Confirmar importación</button>
+      <button type="submit" name="accion" value="cancelar">Cancelar</button>
+    </p>
+  </form>
+</section>
+{% endif %}
 {% endblock %}

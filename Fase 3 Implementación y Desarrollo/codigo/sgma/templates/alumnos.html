@@ -3,7 +3,7 @@
 {% block body %}
 <h1>Alumnos</h1>
 <section class="panel">
-  <form method="get" class="row"><label for="q">Buscar por DNI o legajo</label><input id="q" name="q" value="{{ busqueda }}"><button type="submit">Buscar</button><a href="{{ url_for('alumnos') }}">Limpiar</a></form>
+  <form method="get" class="row"><label for="q">{{ 'Buscar por legajo' if es_docente else 'Buscar por DNI o legajo' }}</label><input id="q" name="q" value="{{ busqueda }}"><button type="submit">Buscar</button><a href="{{ url_for('alumnos') }}">Limpiar</a></form>
 </section>
 {% if puede_editar %}<section class="panel">
   <h2>Alta de alumno</h2>
@@ -17,10 +17,10 @@
   </form>
 </section>{% endif %}
 <section class="panel"><h2>Registros (máximo 100)</h2>
-  <table><thead><tr><th>Legajo</th><th>DNI</th><th>Apellido y nombre</th><th>E-mail</th><th>Estado</th>{% if puede_editar %}<th>Acciones</th>{% endif %}</tr></thead><tbody>
-  {% for alumno in alumnos %}<tr><td>{{ alumno.legajo }}</td><td>{{ alumno.dni }}</td><td>{{ alumno.apellido }}, {{ alumno.nombre }}</td><td>{{ alumno.email or '—' }}</td><td>{{ 'Activo' if alumno.activo else 'Inactivo' }}</td>
+  <table><thead><tr><th>Legajo</th>{% if not es_docente %}<th>DNI</th>{% endif %}<th>Apellido y nombre</th>{% if not es_docente %}<th>E-mail</th><th>Estado</th>{% endif %}{% if puede_editar %}<th>Acciones</th>{% endif %}</tr></thead><tbody>
+  {% for alumno in alumnos %}<tr><td>{{ alumno.legajo }}</td>{% if not es_docente %}<td>{{ alumno.dni }}</td>{% endif %}<td>{{ alumno.apellido }}, {{ alumno.nombre }}</td>{% if not es_docente %}<td>{{ alumno.email or '—' }}</td><td>{{ 'Activo' if alumno.activo else 'Inactivo' }}</td>{% endif %}
     {% if puede_editar %}<td>{% if alumno.activo %}<a href="{{ url_for('editar_alumno', id_alumno=alumno.id_alumno) }}">Editar</a> <form method="post"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}"><input type="hidden" name="accion" value="desactivar"><input type="hidden" name="id_alumno" value="{{ alumno.id_alumno }}"><button class="secondary" type="submit">Dar de baja</button></form>{% endif %}</td>{% endif %}</tr>
-  {% else %}<tr><td colspan="6">No hay alumnos para mostrar.</td></tr>{% endfor %}
+  {% else %}<tr><td colspan="{{ 2 if es_docente else (6 if puede_editar else 5) }}">No hay alumnos para mostrar.</td></tr>{% endfor %}
   </tbody></table>
 </section>
 {% endblock %}
