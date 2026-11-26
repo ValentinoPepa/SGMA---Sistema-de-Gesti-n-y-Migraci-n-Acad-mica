@@ -22,7 +22,7 @@ El panel aplica los permisos en el servidor. Una operación no habilitada respon
 1. **Buscar un alumno:** abrir **Búsqueda**, ingresar DNI o legajo y seleccionar el resultado. Desde el detalle se pueden descargar analíticos en PDF o Excel cuando el rol lo permite.
 2. **Registrar actividad académica:** usar las secciones de alumnos, carreras, materias, docentes, ciclos, cursadas y asistencias. Completar los datos requeridos y guardar. Las validaciones informan datos incompletos, duplicados o referencias inválidas.
 3. **Cargar una planilla:** abrir **Cargas**, descargar la plantilla correspondiente y conservar sus encabezados. Completar filas sin cambiar nombres ni orden de columnas, guardar como `.xlsx`, seleccionar tipo de carga y enviar. Revisar el resultado del lote y descargar el log si hubo errores.
-4. **Interpretar asistencia:** el porcentaje se calcula con las clases computables. Las clases `JUSTIFICADO` se excluyen del denominador. El mínimo se configura en `parametros.asistencia_minima`.
+4. **Interpretar asistencia:** el porcentaje es `PRESENTE / (PRESENTE + AUSENTE) × 100`, redondeado a un decimal. Las clases `JUSTIFICADO` se muestran por separado y se excluyen tanto del numerador como del denominador. Si no hay clases `PRESENTE` o `AUSENTE`, el porcentaje queda sin informar. El umbral se configura en `parametros.asistencia_minima`; el valor semilla actual es 75 %, marcado en el DDL como provisorio hasta confirmación institucional.
 5. **Exportar reportes:** desde la búsqueda se descarga el analítico individual; el reporte general de alumnos se descarga en Excel. Los documentos contienen información académica personal y deben compartirse solo con personas autorizadas.
 
 ## Plantillas de carga
