@@ -84,6 +84,35 @@ class FuentesETLTests(unittest.TestCase):
         self.assertTrue(all(acta["fecha_examen"] <= date.today() for acta in actas))
         self.assertTrue(all(acta["nota"] is None if acta["estado"] == "AUSENTE" else acta["nota"] is not None for acta in actas))
 
+    def test_plan_conserva_mayusculas_de_carrera_y_errores_tienen_codigo(self):
+        plan = self._excel(
+            "Plan_Estudios.xlsx",
+            "Materias",
+            ["Nom_Carrera", "Cod_Mat", "Nombre_Materia", "Año_Cursada"],
+            [
+                ["Tecnicatura en Desarrollo de Software (TSDS)", "SIS-101", "Introducción", "1°"],
+                ["Tecnicatura en Desarrollo de Software (TSDS)", "", "Sin Código", "1°"],
+            ],
+        )
+        errores = RegistroErrores()
+        carreras, _ = transformar_plan(plan, errores)
+        self.assertEqual(carreras, ["Tecnicatura en Desarrollo de Software (TSDS)"])
+        self.assertEqual(len(errores.errores), 1)
+        self.assertEqual(errores.errores[0].codigo, "ERR_12_DATO_INVALID")
+        self.assertNotEqual(errores.errores[0].codigo, "VALIDACION")
+
+    def test_etl_desacoplado_de_carpeta_de_fases_y_planillas(self):
+        from sgma.etl import preparar
+        from sgma.rutas import buscar_carpeta_v11_opcional
+
+        aislado = self.raiz / "sin_fases" / "sgma" / "etl.py"
+        aislado.parent.mkdir(parents=True, exist_ok=True)
+        aislado.touch()
+        self.assertIsNone(buscar_carpeta_v11_opcional(aislado))
+
+        with self.assertRaises(FileNotFoundError):
+            preparar(RegistroErrores(), directorio_fuentes=self.raiz / "sin_fases")
+
 
 if __name__ == "__main__":
     unittest.main()
