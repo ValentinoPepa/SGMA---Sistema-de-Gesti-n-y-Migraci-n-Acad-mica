@@ -1,68 +1,32 @@
-# Resultados de QA de SGMA v1.1
+# Resultados de QA del SGMA
 
-Última revisión local: 16 de noviembre de 2026.
+## Pruebas automatizadas de la aplicación
 
-## Pruebas automatizadas
+La suite automatizada de 18 pruebas cubre validaciones, normalización de fuentes legadas, referencias de actas, control de acceso por rol y validaciones de carga masiva. Las rutas web se probaron con conexiones simuladas; esto no equivale a una prueba de integración contra una base real.
 
-Ejecución desde `Fase 3 Implementación y Desarrollo/codigo`:
+## Verificación del esquema y restricciones
 
-```powershell
-python -m unittest discover -s "../../Fase 4 Verificación y QA/pruebas" -v
-```
+La evidencia de C5 registra **26/26 pruebas SQL aprobadas** en MySQL 8.4.13: 19 tablas, 14 triggers, 3 procedimientos, 25 claves foráneas, 10 restricciones `CHECK`, 15 restricciones `UNIQUE`, rechazos esperados ante datos inválidos, asignación y sincronización de legajos y eventos de auditoría. Las pruebas de permisos P1 a P8 también se ejecutaron en ese servidor: las operaciones prohibidas para `sgma_app` devuelven error 1142; los triggers pueden escribir auditoría y conservar el identificador del usuario.
 
-Resultado actual: **20 pruebas aprobadas**. Cubren normalización y validación de datos, preparación ETL, permisos por rol, carga de planillas, lectura del legajo devuelto por MySQL Connector como diccionario, renderizado del detalle de asistencias y los accesos del inicio.
+## Migración y rendimiento
 
-Las rutas web se prueban con conexiones simuladas. Estas pruebas no sustituyen la integración contra una instancia MySQL aislada.
+La carga inicial registrada en C3 produjo 80 alumnos, 2 carreras, 24 materias y 189 actas; el lote informó 204 filas de origen, 189 correctas y 15 con error. Los conteos describen la carga efectivamente realizada en MariaDB 10.4.32.
 
-## Ensayo ETL con las fuentes locales v1.1
+El ensayo C4 de rendimiento y concurrencia está documentado en [RESULTADOS_C4_RENDIMIENTO_CONCURRENCIA.md](RESULTADOS_C4_RENDIMIENTO_CONCURRENCIA.md). Se ejecutó en MariaDB 10.4.32. Al contrastarlo con el SRS v1.2 recibido, las pruebas resultan parciales frente a RNF-01, RNF-02, RNF-10 y RNF-11; el informe detalla qué escenarios faltan. No se presentan como certificación de producción.
 
-Comando ejecutado en modo de solo lectura (`--dry-run`), con el log guardado fuera del repositorio:
+## Alcance y evidencia
 
-```powershell
-python -m sgma.etl --dry-run --log "$env:TEMP\sgma-qa-dry-run.log"
-```
+- [Informe C5 de calidad e integridad](INFORME_C5_CALIDAD_INTEGRIDAD.md), con capturas de resultados.
+- [Resultados C4 de rendimiento y concurrencia](RESULTADOS_C4_RENDIMIENTO_CONCURRENCIA.md).
+- [Manual de usuario](../Fase%205%20Despliegue%20y%20Mantenimiento/MANUAL_DE_USUARIO.md) y [guía de operación](../Fase%205%20Despliegue%20y%20Mantenimiento/OPERACION_Y_RESPALDOS.md).
 
-| Resultado preparado | Cantidad |
-| --- | ---: |
-| Alumnos | 80 |
-| Carreras | 2 |
-| Materias | 24 |
-| Actas | 189 |
-| Registros reportados para revisión | 25 |
+Los resultados corresponden a los motores, versiones, volúmenes y procedimientos indicados en cada evidencia. No se extrapolan automáticamente a un servidor productivo.
 
-El ensayo no se conectó a MySQL y no escribió registros. Las 25 observaciones agregadas, sin valores personales, fueron: 1 materia duplicada; 3 DNI duplicados; 2 fechas de nacimiento inválidas; 4 correos inválidos; 4 referencias de alumno y 4 de materia no encontradas en actas; 4 fechas de examen inválidas; y 3 notas/condiciones inválidas.
+## Trazabilidad ETL A2
 
-Los archivos fuente contienen información personal. Permanecen fuera del repositorio Git; el `.gitignore` excluye las planillas de alumnos, actas y claves de errores. El log generado contiene archivo, fila, campo, código y mensaje, no los valores personales de las filas.
+La carga A2, sus tres lotes, la identidad ADMIN de auditoria y el ensayo de rollback estan verificados en [RESULTADOS_A2_ETL.md](RESULTADOS_A2_ETL.md).
 
-## Ensayo de rendimiento ETL sintético
 
-Se ejecutó `pruebas/benchmark_etl_sintetico.py` con 50.000 alumnos y 50.000 actas ficticias. El parseo y la transformación terminaron en **59,07 segundos** en esta PC; se generaron 50.000 alumnos y 50.000 actas válidas, sin errores. El ensayo no usó datos personales.
+## Alineación de validaciones A3
 
-Esto valida solo el parseo y la transformación local, no la inserción transaccional en MySQL. El requisito histórico RNF-02 indica procesar 50.000 registros en menos de 10 minutos; el tiempo integral de migración debe medirse contra una base de QA en el servidor destino.
-
-## Revisión estática del DDL
-
-Conteos calculados sobre `Fase 2 Diseño y Base de Datos/gestion_academica.sql`:
-
-- 19 tablas.
-- 25 declaraciones de clave foránea.
-- 10 restricciones `CHECK`.
-- 15 restricciones `UNIQUE`.
-- 14 triggers y 3 procedimientos almacenados.
-
-La inspección confirma que esas declaraciones están escritas en el DDL; no demuestra que el motor instalado las haya creado o esté aplicando correctamente.
-
-## Respaldo MySQL en Windows
-
-El 16 de noviembre de 2026 quedó configurada en esta PC la tarea `SGMA MySQL Daily Backup`, diaria a las 02:00 (hora local), con inicio al volver a estar disponible, retención de 30 días y destino `%LOCALAPPDATA%\SGMA\backups`. La tarea se ejecutó correctamente (`LastTaskResult = 0`) y generó un dump comprimido de 5.335 bytes. Se leyó completamente el flujo gzip de la copia (41.452 bytes descomprimidos), sin errores.
-
-Las credenciales de respaldo están en `%LOCALAPPDATA%\SGMA\secrets\backup.cnf`, fuera del repo y con ACL restringida; MySQL usa la cuenta dedicada `sgma_backup`. El único destino está en esta PC. La integridad gzip no prueba que el dump pueda restaurarse; esa comprobación sigue pendiente.
-
-## Alcance pendiente para cerrar QA
-
-- Ejecutar pruebas de integridad referencial y restricciones en una base MySQL de QA aislada.
-- Ejecutar la migración completa y pruebas de concurrencia contra MySQL, midiendo RNF-01, RNF-02 y los RNF-10/11 definidos por la línea base vigente. Está disponible el informe aprobado v1.0 y el mapeo v1.1; no se encontró el SRS v1.1 aprobado.
-- Ejecutar la migración inicial autorizada y reconciliar los datos migrados con las fuentes originales. La base `gestion_academica` conserva sus datos de demostración: la ejecución `--apply` no llegó a realizarse.
-- Restaurar el backup reciente en una base aislada y registrar los conteos y el resultado.
-
-No se deben cerrar estas comprobaciones usando solo pruebas unitarias, conteos estáticos o datos de demostración.
+La alineación con el Diccionario v1.2 (`ERR_10_DNI_INVALID`, `ERR_11_NOMBRE_INVALID`, `ERR_12_DATO_INVALID`, partículas en nombres y preservación de mayúsculas en carreras) está verificada en [RESULTADOS_A3_VALIDACIONES.md](RESULTADOS_A3_VALIDACIONES.md).
