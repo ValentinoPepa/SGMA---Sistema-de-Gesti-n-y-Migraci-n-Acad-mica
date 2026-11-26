@@ -34,23 +34,20 @@ No se conecta a MySQL ni escribe en la base.
 python -m sgma.etl
 ```
 
-## Aplicar la migración
+## Aplicar la migracion
 
-Ejecutar primero `../../Fase 2 Diseño y Base de Datos/gestion_academica.sql`
-en MySQL 8.0.16 o superior. Luego
-configurar `SGMA_DB_HOST`, `SGMA_DB_USER` y `SGMA_DB_PASSWORD`; opcionalmente,
-`SGMA_DB_PORT` (predeterminado `3306`) y `SGMA_DB_NAME` (predeterminado
-`gestion_academica`). Con esas variables, aplicar explícitamente:
+Ejecutar primero el DDL vigente en un esquema vacio. Configurar `SGMA_DB_HOST`, `SGMA_DB_USER` y `SGMA_DB_NAME` con la conexion y la base elegidas. `SGMA_DB_PASSWORD` es opcional: si el usuario de MySQL no tiene contrasena, dejarla sin definir.
+
+Antes de aplicar, crear una cuenta ADMIN activa en esa base mediante `/setup` y consultar su `id_usuario` en Workbench. Definir `SGMA_MIGRACION_USER_ID` con ese ID. El ETL valida que corresponda a un usuario ADMIN activo.
 
 ```powershell
+$env:SGMA_MIGRACION_USER_ID = "<id del ADMIN activo>"
 python -m sgma.etl --apply
 ```
 
-La escritura se hace en una transacción. Si ya existe un lote de migración de
-`Actas_Historicas.csv`, el proceso se detiene para evitar duplicar actas. El log
-registra archivo, fila, campo, código y mensaje; omite valores personales de las
-planillas.
+La migracion crea un registro de `lotes_carga` por cada archivo fuente (alumnos, plan de estudios y actas), asigna el usuario ADMIN responsable y establece `@app_user_id` en la conexion para los triggers de auditoria. Los tres lotes y los datos se aplican en una unica transaccion: ante un error, el ETL revierte todo. No volver a ejecutar sobre una base que ya tenga un lote de migracion para cualquiera de esos archivos.
 
+El log registra archivo, fila, campo, codigo y mensaje; omite valores personales de las planillas. `filas_error` cuenta filas rechazadas; las advertencias de campos opcionales que no impiden cargar una fila permanecen en el log.
 ## Panel web
 
 Ejecutar primero el DDL en MySQL y configurar las variables de conexión. Antes
