@@ -2,7 +2,7 @@
 
 ## Pruebas automatizadas de la aplicación
 
-La suite automatizada de 18 pruebas cubre validaciones, normalización de fuentes legadas, referencias de actas, control de acceso por rol y validaciones de carga masiva. Las rutas web se probaron con conexiones simuladas; esto no equivale a una prueba de integración contra una base real.
+La suite automatizada de 25 pruebas cubre validaciones, normalización de fuentes legadas, referencias de actas, control de acceso por rol, desacoplamiento de planillas legadas, carga masiva y seguridad de sesión/login. Las rutas web se probaron con conexiones simuladas; esto no equivale a una prueba de integración contra una base real.
 
 ## Verificación del esquema y restricciones
 
@@ -30,3 +30,23 @@ La carga A2, sus tres lotes, la identidad ADMIN de auditoria y el ensayo de roll
 ## Alineación de validaciones A3
 
 La alineación con el Diccionario v1.2 (`ERR_10_DNI_INVALID`, `ERR_11_NOMBRE_INVALID`, `ERR_12_DATO_INVALID`, partículas en nombres y preservación de mayúsculas en carreras) está verificada en [RESULTADOS_A3_VALIDACIONES.md](RESULTADOS_A3_VALIDACIONES.md).
+
+
+## Desacoplamiento A4
+
+El arranque independiente del panel web y del ETL sin la carpeta de planillas legadas ni la estructura de fases está verificado en [RESULTADOS_A4_DESACOPLAMIENTO.md](RESULTADOS_A4_DESACOPLAMIENTO.md).
+
+
+## Carga masiva A5
+
+La vista previa con confirmación, la carga opcional de `carrera`/`anio_ingreso` y el límite de 5.000 filas están verificados en [RESULTADOS_A5_CARGA_MASIVA.md](RESULTADOS_A5_CARGA_MASIVA.md).
+
+
+## Autenticación y sesión A6
+
+El bloqueo tras 5 intentos fallidos y el cierre de sesión tras 30 minutos de inactividad están verificados en [RESULTADOS_A6_AUTENTICACION.md](RESULTADOS_A6_AUTENTICACION.md).
+
+
+## Permisos por rol A7
+
+La matriz de acceso por rol y el alcance de datos del DOCENTE están documentados en [RESULTADOS_A7_PERMISOS.md](RESULTADOS_A7_PERMISOS.md). La ruta de registro de actas también exige que la mesa pertenezca a la materia y ciclo asignados al docente.
