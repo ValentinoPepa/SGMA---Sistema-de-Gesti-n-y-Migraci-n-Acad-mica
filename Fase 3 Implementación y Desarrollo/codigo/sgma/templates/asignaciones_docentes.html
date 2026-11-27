@@ -1,0 +1,29 @@
+﻿{% extends "base.html" %}
+{% block title %}Asignaciones docentes | SGMA{% endblock %}
+{% block body %}
+<h1>Asignación de docentes</h1>
+<p>Vincule cada docente con la materia que dictará durante un ciclo lectivo. Esta asignación define qué cursadas puede consultar y en cuáles puede cargar notas.</p>
+{% if puede_editar %}
+<section class="panel">
+  <h2>Nueva asignación</h2>
+  {% if docentes and materias and ciclos %}
+  <form method="post">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+    <label for="id_docente">Docente</label>
+    <select id="id_docente" name="id_docente" required><option value="">Seleccione…</option>{% for docente in docentes %}<option value="{{ docente.id_docente }}">{{ docente.apellido }}, {{ docente.nombre }}</option>{% endfor %}</select>
+    <label for="id_materia">Materia</label>
+    <select id="id_materia" name="id_materia" required><option value="">Seleccione…</option>{% for materia in materias %}<option value="{{ materia.id_materia }}">{{ materia.codigo }} · {{ materia.nombre }} ({{ materia.carrera }})</option>{% endfor %}</select>
+    <label for="id_ciclo">Ciclo lectivo</label>
+    <select id="id_ciclo" name="id_ciclo" required><option value="">Seleccione…</option>{% for ciclo in ciclos %}<option value="{{ ciclo.id_ciclo }}">{{ ciclo.anio }}</option>{% endfor %}</select>
+    <p><button type="submit">Guardar asignación</button></p>
+  </form>
+  {% else %}<div class="notice">Para asignar, debe existir al menos un docente activo, una materia activa y un ciclo lectivo.</div>{% endif %}
+</section>
+{% else %}<div class="notice">Esta pantalla es de consulta. Solo el PRECEPTOR puede crear asignaciones.</div>{% endif %}
+<section class="panel">
+  <h2>Asignaciones vigentes</h2>
+  {% if asignaciones %}<table><thead><tr><th>Ciclo</th><th>Carrera</th><th>Materia</th><th>Docente</th><th>Estado</th></tr></thead><tbody>
+  {% for fila in asignaciones %}<tr><td>{{ fila.anio }}</td><td>{{ fila.carrera }}</td><td>{{ fila.codigo }} · {{ fila.materia }}</td><td>{{ fila.apellido }}, {{ fila.nombre }}</td><td>{{ 'Activa' if fila.docente_activo and fila.materia_activa else 'Revisar: docente o materia inactiva' }}</td></tr>{% endfor %}
+  </tbody></table>{% else %}<p>No hay asignaciones registradas.</p>{% endif %}
+</section>
+{% endblock %}

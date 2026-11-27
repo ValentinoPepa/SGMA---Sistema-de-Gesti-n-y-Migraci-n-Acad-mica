@@ -1,0 +1,51 @@
+{% extends "base.html" %}
+{% block title %}Correlatividades · SGMA{% endblock %}
+{% block body %}
+<h1>Correlatividades</h1>
+<p>Una materia correlativa debe estar aprobada en un acta para que el alumno pueda inscribirse a cursar otra materia.</p>
+
+{% if puede_editar %}
+<section class="panel">
+  <h2>Definir correlativa</h2>
+  <form method="post">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+    <label for="id_materia">Materia que requiere aprobación previa</label>
+    <select id="id_materia" name="id_materia" required>
+      <option value="">Seleccione una materia</option>
+      {% for materia in materias %}
+      <option value="{{ materia.id_materia }}">{{ materia.codigo }} · {{ materia.nombre }} · {{ materia.carrera }} · año {{ materia.anio_nivel }}</option>
+      {% endfor %}
+    </select>
+    <label for="id_materia_requerida">Materia que debe estar aprobada</label>
+    <select id="id_materia_requerida" name="id_materia_requerida" required>
+      <option value="">Seleccione la correlativa requerida</option>
+      {% for materia in materias %}
+      <option value="{{ materia.id_materia }}">{{ materia.codigo }} · {{ materia.nombre }} · {{ materia.carrera }} · año {{ materia.anio_nivel }}</option>
+      {% endfor %}
+    </select>
+    <p><button type="submit">Guardar correlativa</button></p>
+  </form>
+</section>
+{% else %}
+<div class="notice">Esta pantalla es de consulta. Solo el PRECEPTOR puede definir correlativas.</div>
+{% endif %}
+
+<section class="panel">
+  <h2>Reglas definidas</h2>
+  <table>
+    <thead><tr><th>Carrera</th><th>Materia</th><th>Debe aprobar antes</th><th>Estado</th></tr></thead>
+    <tbody>
+      {% for regla in reglas %}
+      <tr>
+        <td>{{ regla.carrera }}</td>
+        <td>{{ regla.codigo_materia }} · {{ regla.materia }}</td>
+        <td>{{ regla.codigo_requerida }} · {{ regla.materia_requerida }}</td>
+        <td>{{ 'Activa' if regla.materia_activa and regla.requerida_activa else 'Incluye materia inactiva' }}</td>
+      </tr>
+      {% else %}
+      <tr><td colspan="4">No hay correlatividades definidas.</td></tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</section>
+{% endblock %}

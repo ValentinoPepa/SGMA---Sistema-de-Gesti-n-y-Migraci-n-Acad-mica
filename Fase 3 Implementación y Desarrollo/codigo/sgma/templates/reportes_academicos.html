@@ -1,0 +1,18 @@
+{% extends "base.html" %}
+{% block title %}Reportes acad&eacute;micos | SGMA{% endblock %}
+{% block body %}
+<h1>Reportes acad&eacute;micos</h1>
+<section class="panel"><h2>Filtros</h2><form method="get" class="row">
+  <label for="materia">Materia</label><select id="materia" name="materia"><option value="">Todas</option>{% for materia in materias %}<option value="{{ materia.id_materia }}" {% if materia_seleccionada == materia.id_materia %}selected{% endif %}>{{ materia.codigo }} &middot; {{ materia.nombre }}</option>{% endfor %}</select>
+  <label for="anio">Ciclo</label><select id="anio" name="anio"><option value="">Todos</option>{% for ciclo in ciclos %}<option value="{{ ciclo.anio }}" {% if anio_seleccionado == ciclo.anio %}selected{% endif %}>{{ ciclo.anio }}</option>{% endfor %}</select>
+  <button type="submit">Aplicar</button><a href="{{ url_for('reportes_academicos') }}">Limpiar</a>
+</form></section>
+<section class="panel"><div class="row"><h2>Listado de actas activas</h2><a href="{{ url_for('exportar_reporte_actas', materia=materia_seleccionada or '', anio=anio_seleccionado or '') }}">Descargar Excel</a> ? <a href="{{ url_for('exportar_reporte_actas_pdf', materia=materia_seleccionada or '', anio=anio_seleccionado or '') }}">Descargar PDF</a></div>
+  <p>La pantalla muestra hasta 1000 registros; la descarga incluye todos los resultados del filtro. Las actas historicas sin ciclo aparecen al elegir Todos.</p>
+  {% if actas %}<table><thead><tr><th>Legajo</th><th>Alumno</th><th>Carrera</th><th>Materia</th><th>Ciclo</th><th>Fecha</th><th>Nota</th><th>Estado</th><th>Libro/Folio</th></tr></thead><tbody>{% for acta in actas %}<tr><td>{{ acta.legajo }}</td><td>{{ acta.apellido }}, {{ acta.nombre }}</td><td>{{ acta.carrera }}</td><td>{{ acta.codigo }} &middot; {{ acta.materia }}</td><td>{{ acta.anio or 'Hist&oacute;rica' }}</td><td>{{ acta.fecha_examen }}</td><td>{{ acta.nota if acta.nota is not none else "-" }}</td><td>{{ acta.estado }}</td><td>{{ acta.libro }}/{{ acta.folio }}</td></tr>{% endfor %}</tbody></table>{% else %}<p>No hay actas activas para los filtros seleccionados.</p>{% endif %}
+</section>
+<section class="panel"><div class="row"><h2>Asistencia por materia y ciclo</h2><a href="{{ url_for('exportar_reporte_asistencia_materia', materia=materia_seleccionada or '', anio=anio_seleccionado or '') }}">Descargar Excel</a> ? <a href="{{ url_for('exportar_reporte_asistencia_materia_pdf', materia=materia_seleccionada or '', anio=anio_seleccionado or '') }}">Descargar PDF</a></div>
+  <p>Porcentaje agregado: PRESENTE &divide; (PRESENTE + AUSENTE). Las asistencias JUSTIFICADO se informan aparte y quedan fuera del denominador.</p>
+  {% if asistencia %}<table><thead><tr><th>Carrera</th><th>Materia</th><th>Ciclo</th><th>Alumnos</th><th>Presentes</th><th>Ausentes</th><th>Justificadas</th><th>% asistencia</th></tr></thead><tbody>{% for fila in asistencia %}<tr><td>{{ fila.carrera }}</td><td>{{ fila.codigo }} &middot; {{ fila.materia }}</td><td>{{ fila.anio }}</td><td>{{ fila.alumnos }}</td><td>{{ fila.presentes }}</td><td>{{ fila.ausentes }}</td><td>{{ fila.justificadas }}</td><td>{{ fila.porcentaje ~ '%' if fila.porcentaje is not none else 'Sin clases registradas' }}</td></tr>{% endfor %}</tbody></table>{% else %}<p>No hay inscripciones activas para los filtros seleccionados.</p>{% endif %}
+</section>
+{% endblock %}

@@ -1,0 +1,17 @@
+{% extends "base.html" %}
+{% block title %}Matr?culas | SGMA{% endblock %}
+{% block body %}
+<h1>Matr?culas por carrera</h1>
+<p>Registre la carrera y el a?o de ingreso de cada alumno. El v?nculo es independiente de la inscripci?n a materias.</p>
+{% if puede_editar %}<section class="panel"><h2>Alta de matr?cula</h2>
+  {% if alumnos and carreras %}<form method="post"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+    <label for="id_alumno">Alumno</label><select id="id_alumno" name="id_alumno" required><option value="">Seleccione?</option>{% for alumno in alumnos %}<option value="{{ alumno.id_alumno }}">{{ alumno.apellido }}, {{ alumno.nombre }} ? legajo {{ alumno.legajo }}</option>{% endfor %}</select>
+    <label for="id_carrera">Carrera</label><select id="id_carrera" name="id_carrera" required><option value="">Seleccione?</option>{% for carrera in carreras %}<option value="{{ carrera.id_carrera }}">{{ carrera.nombre }}</option>{% endfor %}</select>
+    <label for="anio_ingreso">A?o de ingreso</label><input id="anio_ingreso" name="anio_ingreso" type="number" min="1900" max="2200" required>
+    <p><button type="submit">Registrar matr?cula</button></p>
+  </form>{% else %}<div class="notice">Se necesita al menos un alumno activo y una carrera activa.</div>{% endif %}
+</section>{% else %}<div class="notice">Esta pantalla es de consulta. Solo PRECEPTOR puede registrar matr?culas.</div>{% endif %}
+<section class="panel"><h2>Matr?culas registradas</h2>
+  {% if matriculas %}<table><thead><tr><th>Legajo</th><th>Alumno</th><th>Carrera</th><th>A?o de ingreso</th><th>Estado</th></tr></thead><tbody>{% for fila in matriculas %}<tr><td>{{ fila.legajo }}</td><td>{{ fila.apellido }}, {{ fila.nombre }}</td><td>{{ fila.carrera }}</td><td>{{ fila.anio_ingreso }}</td><td>{{ fila.estado }}</td></tr>{% endfor %}</tbody></table>{% else %}<p>No hay matr?culas registradas.</p>{% endif %}
+</section>
+{% endblock %}
