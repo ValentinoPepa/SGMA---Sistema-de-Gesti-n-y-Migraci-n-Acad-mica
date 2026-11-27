@@ -19,7 +19,14 @@ from openpyxl import Workbook, load_workbook
 from flask import Flask, abort, flash, g, redirect, render_template, request, send_file, send_from_directory, session, url_for
 from werkzeug.security import check_password_hash, generate_password_hash
 
-from .validaciones import normalizar_dni, normalizar_email, normalizar_fecha, normalizar_nombre, normalizar_nota
+from .validaciones import (
+    normalizar_dni,
+    normalizar_email,
+    normalizar_fecha,
+    normalizar_nombre,
+    normalizar_nota,
+    validar_correlativas,
+)
 from .errores import RegistroErrores
 from .rutas import resolver_carpeta_plantillas
 
@@ -549,6 +556,166 @@ def create_app(test_config: dict[str, Any] | None = None) -> Flask:
             cursor.close()
         return render_template("materias.html", materias=registros, carreras=opciones_carrera, puede_editar=puede_editar)
 
+    @app.route("/correlatividades", methods=["GET", "POST"])
+    @requiere_roles("ADMIN", "PRECEPTOR", "DIRECTIVO")
+    def correlatividades():
+        cursor = _cursor()
+        puede_editar = g.usuario["rol"] == "PRECEPTOR"
+        try:
+            if request.method == "POST":
+                if not puede_editar:
+                    abort(403)
+                _validar_csrf()
+                try:
+                    id_materia = int(request.form.get("id_materia", ""))
+                    id_requerida = int(request.form.get("id_materia_requerida", ""))
+                except (TypeError, ValueError):
+                    flash("Seleccione la materia y su correlativa.", "error")
+                else:
+                    if id_materia <= 0 or id_requerida <= 0:
+                        flash("Seleccione dos materias activas.", "error")
+                    elif id_materia == id_requerida:
+                        flash("Una materia no puede ser correlativa de sí misma.", "error")
+                    else:
+                        cursor.execute(
+                            "SELECT id_materia FROM materias WHERE id_materia IN (%s, %s) AND activa=TRUE",
+                            (id_materia, id_requerida),
+                        )
+                        if len(cursor.fetchall()) != 2:
+                            flash("Las dos materias deben existir y estar activas.", "error")
+                        else:
+                            # A requires B is an edge A -> B. Adding A -> B
+                            # would be circular if B already reaches A.
+                            cursor.execute("SELECT id_materia, id_materia_requerida FROM correlatividades")
+                            grafo: dict[int, set[int]] = {}
+                            for fila in cursor.fetchall():
+                                grafo.setdefault(int(fila["id_materia"]), set()).add(
+                                    int(fila["id_materia_requerida"])
+                                )
+                            pendientes = [id_requerida]
+                            visitadas: set[int] = set()
+                            circular = False
+                            while pendientes:
+                                actual = pendientes.pop()
+                                if actual == id_materia:
+                                    circular = True
+                                    break
+                                if actual in visitadas:
+                                    continue
+                                visitadas.add(actual)
+                                pendientes.extend(grafo.get(actual, ()))
+                            if circular:
+                                flash("La correlativa genera un ciclo entre materias.", "error")
+                            else:
+                                try:
+                                    cursor.execute(
+                                        "INSERT INTO correlatividades (id_materia, id_materia_requerida) "
+                                        "VALUES (%s, %s)",
+                                        (id_materia, id_requerida),
+                                    )
+                                    _db().commit()
+                                    flash("Correlativa definida.", "success")
+                                    return redirect(url_for("correlatividades"))
+                                except mysql.connector.IntegrityError:
+                                    _db().rollback()
+                                    flash("Esta correlativa ya está definida.", "error")
+
+            cursor.execute(
+                "SELECT c.id_materia, c.id_materia_requerida, "
+                "objetivo.codigo AS codigo_materia, objetivo.nombre AS materia, "
+                "requerida.codigo AS codigo_requerida, requerida.nombre AS materia_requerida, "
+                "objetivo.activa AS materia_activa, requerida.activa AS requerida_activa, "
+                "carrera.nombre AS carrera "
+                "FROM correlatividades c "
+                "JOIN materias objetivo ON objetivo.id_materia=c.id_materia "
+                "JOIN materias requerida ON requerida.id_materia=c.id_materia_requerida "
+                "JOIN carreras carrera ON carrera.id_carrera=objetivo.id_carrera "
+                "ORDER BY carrera.nombre, objetivo.anio_nivel, objetivo.codigo, requerida.codigo"
+            )
+            reglas = cursor.fetchall()
+            cursor.execute(
+                "SELECT m.id_materia, m.codigo, m.nombre, m.anio_nivel, c.nombre AS carrera "
+                "FROM materias m JOIN carreras c ON c.id_carrera=m.id_carrera "
+                "WHERE m.activa=TRUE AND c.activa=TRUE "
+                "ORDER BY c.nombre, m.anio_nivel, m.codigo"
+            )
+            materias_activas = cursor.fetchall()
+        finally:
+            cursor.close()
+        return render_template(
+            "correlatividades.html",
+            reglas=reglas,
+            materias=materias_activas,
+            puede_editar=puede_editar,
+        )
+
+    @app.route("/matriculas", methods=["GET", "POST"])
+    @requiere_roles("ADMIN", "PRECEPTOR", "DIRECTIVO")
+    def matriculas():
+        cursor = _cursor()
+        puede_editar = g.usuario["rol"] == "PRECEPTOR"
+        try:
+            if request.method == "POST":
+                if not puede_editar:
+                    abort(403)
+                _validar_csrf()
+                alumno_texto = request.form.get("id_alumno", "")
+                carrera_texto = request.form.get("id_carrera", "")
+                anio_texto = request.form.get("anio_ingreso", "")
+                if not alumno_texto.isdigit() or not carrera_texto.isdigit() or not anio_texto.isdigit():
+                    flash("Seleccione un alumno, una carrera y un a?o de ingreso v?lido.", "error")
+                else:
+                    id_alumno, id_carrera, anio_ingreso = int(alumno_texto), int(carrera_texto), int(anio_texto)
+                    cursor.execute("SELECT id_alumno FROM alumnos WHERE id_alumno=%s AND activo=TRUE", (id_alumno,))
+                    alumno = cursor.fetchone()
+                    cursor.execute("SELECT id_carrera FROM carreras WHERE id_carrera=%s AND activa=TRUE", (id_carrera,))
+                    carrera = cursor.fetchone()
+                    if not 1900 <= anio_ingreso <= 2200:
+                        flash("El a?o de ingreso debe estar entre 1900 y 2200.", "error")
+                    elif not alumno or not carrera:
+                        flash("El alumno o la carrera no existe o no est? activo.", "error")
+                    else:
+                        cursor.execute(
+                            "SELECT id_matricula FROM matriculas WHERE id_alumno=%s AND id_carrera=%s LIMIT 1",
+                            (id_alumno, id_carrera),
+                        )
+                        if cursor.fetchone():
+                            flash("El alumno ya tiene una matr?cula en esa carrera.", "error")
+                        else:
+                            try:
+                                cursor.execute(
+                                    "INSERT INTO matriculas (id_alumno,id_carrera,anio_ingreso) VALUES (%s,%s,%s)",
+                                    (id_alumno, id_carrera, anio_ingreso),
+                                )
+                                _db().commit()
+                                flash("Matr?cula registrada.", "success")
+                                return redirect(url_for("matriculas"))
+                            except mysql.connector.IntegrityError:
+                                _db().rollback()
+                                flash("No se pudo guardar: el alumno ya est? matriculado en esa carrera.", "error")
+
+            cursor.execute(
+                "SELECT a.id_alumno, a.legajo, a.apellido, a.nombre FROM alumnos a "
+                "WHERE a.activo=TRUE ORDER BY a.apellido,a.nombre"
+            )
+            alumnos_activos = cursor.fetchall()
+            cursor.execute("SELECT id_carrera,nombre FROM carreras WHERE activa=TRUE ORDER BY nombre")
+            carreras_activas = cursor.fetchall()
+            cursor.execute(
+                "SELECT mt.id_matricula,a.legajo,a.apellido,a.nombre,c.nombre AS carrera,"
+                "mt.anio_ingreso,mt.estado FROM matriculas mt "
+                "JOIN alumnos a ON a.id_alumno=mt.id_alumno "
+                "JOIN carreras c ON c.id_carrera=mt.id_carrera "
+                "ORDER BY a.apellido,a.nombre,c.nombre"
+            )
+            registros = cursor.fetchall()
+        finally:
+            cursor.close()
+        return render_template(
+            "matriculas.html", alumnos=alumnos_activos, carreras=carreras_activas,
+            matriculas=registros, puede_editar=puede_editar,
+        )
+
     @app.route("/docentes", methods=["GET", "POST"])
     @requiere_roles("ADMIN", "PRECEPTOR", "DIRECTIVO")
     def docentes():
@@ -584,6 +751,99 @@ def create_app(test_config: dict[str, Any] | None = None) -> Flask:
         finally:
             cursor.close()
         return render_template("docentes.html", docentes=registros, puede_editar=puede_editar)
+
+    @app.route("/asignaciones-docentes", methods=["GET", "POST"])
+    @requiere_roles("ADMIN", "PRECEPTOR", "DIRECTIVO")
+    def asignaciones_docentes():
+        cursor = _cursor()
+        puede_editar = g.usuario["rol"] == "PRECEPTOR"
+        try:
+            if request.method == "POST":
+                if not puede_editar:
+                    abort(403)
+                _validar_csrf()
+                docente_texto = request.form.get("id_docente", "")
+                materia_texto = request.form.get("id_materia", "")
+                ciclo_texto = request.form.get("id_ciclo", "")
+                if not docente_texto.isdigit() or not materia_texto.isdigit() or not ciclo_texto.isdigit():
+                    flash("Seleccione un docente, una materia y un ciclo lectivo.", "error")
+                else:
+                    id_docente = int(docente_texto)
+                    id_materia = int(materia_texto)
+                    id_ciclo = int(ciclo_texto)
+                    cursor.execute(
+                        "SELECT id_docente FROM docentes WHERE id_docente=%s AND activo=TRUE",
+                        (id_docente,),
+                    )
+                    docente = cursor.fetchone()
+                    cursor.execute(
+                        "SELECT id_materia FROM materias WHERE id_materia=%s AND activa=TRUE",
+                        (id_materia,),
+                    )
+                    materia = cursor.fetchone()
+                    cursor.execute("SELECT id_ciclo FROM ciclos_lectivos WHERE id_ciclo=%s", (id_ciclo,))
+                    ciclo = cursor.fetchone()
+                    if not docente or not materia or not ciclo:
+                        flash("El docente, la materia o el ciclo no existe o no está activo.", "error")
+                    else:
+                        cursor.execute(
+                            "SELECT 1 FROM asignaciones_docentes "
+                            "WHERE id_docente=%s AND id_materia=%s AND id_ciclo=%s LIMIT 1",
+                            (id_docente, id_materia, id_ciclo),
+                        )
+                        if cursor.fetchone():
+                            flash("Esta asignación ya está definida.", "error")
+                        else:
+                            try:
+                                cursor.execute(
+                                    "INSERT INTO asignaciones_docentes (id_docente,id_materia,id_ciclo) "
+                                    "VALUES (%s,%s,%s)",
+                                    (id_docente, id_materia, id_ciclo),
+                                )
+                                _db().commit()
+                                flash("Docente asignado a la materia y al ciclo.", "success")
+                                return redirect(url_for("asignaciones_docentes"))
+                            except mysql.connector.IntegrityError:
+                                _db().rollback()
+                                flash("No se pudo guardar: la asignación o alguna referencia ya existe.", "error")
+
+            cursor.execute(
+                "SELECT ad.id_docente, ad.id_materia, ad.id_ciclo, "
+                "d.apellido, d.nombre, d.activo AS docente_activo, "
+                "m.codigo, m.nombre AS materia, m.activa AS materia_activa, "
+                "c.anio, carrera.nombre AS carrera "
+                "FROM asignaciones_docentes ad "
+                "JOIN docentes d ON d.id_docente=ad.id_docente "
+                "JOIN materias m ON m.id_materia=ad.id_materia "
+                "JOIN ciclos_lectivos c ON c.id_ciclo=ad.id_ciclo "
+                "JOIN carreras carrera ON carrera.id_carrera=m.id_carrera "
+                "ORDER BY c.anio DESC, carrera.nombre, m.codigo, d.apellido, d.nombre"
+            )
+            asignaciones = cursor.fetchall()
+            cursor.execute(
+                "SELECT id_docente, apellido, nombre FROM docentes "
+                "WHERE activo=TRUE ORDER BY apellido, nombre"
+            )
+            docentes_activos = cursor.fetchall()
+            cursor.execute(
+                "SELECT m.id_materia, m.codigo, m.nombre, carrera.nombre AS carrera "
+                "FROM materias m JOIN carreras carrera ON carrera.id_carrera=m.id_carrera "
+                "WHERE m.activa=TRUE AND carrera.activa=TRUE "
+                "ORDER BY carrera.nombre, m.codigo"
+            )
+            materias_activas = cursor.fetchall()
+            cursor.execute("SELECT id_ciclo, anio FROM ciclos_lectivos ORDER BY anio DESC")
+            ciclos = cursor.fetchall()
+        finally:
+            cursor.close()
+        return render_template(
+            "asignaciones_docentes.html",
+            asignaciones=asignaciones,
+            docentes=docentes_activos,
+            materias=materias_activas,
+            ciclos=ciclos,
+            puede_editar=puede_editar,
+        )
 
     @app.route("/ciclos", methods=["GET", "POST"])
     @requiere_roles("ADMIN", "PRECEPTOR", "DIRECTIVO", "DOCENTE")
@@ -664,15 +924,21 @@ def create_app(test_config: dict[str, Any] | None = None) -> Flask:
                             flash("No se encontró el alumno, la materia o el ciclo lectivo.", "error")
                         else:
                             cursor.execute(
-                                "SELECT m.id_materia_requerida FROM correlatividades m "
-                                "WHERE m.id_materia = %s AND NOT EXISTS ("
-                                "SELECT 1 FROM actas_examen a WHERE a.id_alumno = %s AND a.id_materia = m.id_materia_requerida "
+                                "SELECT requerida.codigo, requerida.nombre FROM correlatividades regla "
+                                "JOIN materias requerida ON requerida.id_materia=regla.id_materia_requerida "
+                                "WHERE regla.id_materia = %s AND NOT EXISTS ("
+                                "SELECT 1 FROM actas_examen a WHERE a.id_alumno = %s "
+                                "AND a.id_materia = regla.id_materia_requerida "
                                 "AND a.estado = 'APROBADO' AND a.activo = TRUE)",
                                 (materia["id_materia"], alumno["id_alumno"]),
                             )
                             faltantes = cursor.fetchall()
-                            if faltantes:
-                                flash("No se puede inscribir: faltan correlativas aprobadas.", "error")
+                            validacion_correlativas = validar_correlativas(
+                                f"{fila['codigo']} · {fila['nombre']}" for fila in faltantes
+                            )
+                            if not validacion_correlativas.valido:
+                                for error in validacion_correlativas.errores:
+                                    flash(f"{error.codigo}: {error.mensaje}", "error")
                             else:
                                 try:
                                     cursor.execute(
@@ -740,6 +1006,71 @@ def create_app(test_config: dict[str, Any] | None = None) -> Flask:
                                 except mysql.connector.IntegrityError:
                                     _db().rollback()
                                     flash("El alumno ya está inscripto en esa mesa.", "error")
+                elif accion in {"actualizar_nota", "corregir_acta", "anular_nota", "anular_acta", "anular_inscripcion"}:
+                    if rol != "PRECEPTOR":
+                        abort(403)
+                    try:
+                        if accion == "actualizar_nota":
+                            nota_id = int(request.form.get("id_nota", ""))
+                            nota = normalizar_nota(request.form.get("nota"))
+                            fecha = normalizar_fecha(request.form.get("fecha"), campo="fecha")
+                            if not nota.valido or not fecha.valido:
+                                raise ValueError((nota.errores or fecha.errores)[0].mensaje)
+                            cursor.execute(
+                                "UPDATE notas_cursada SET nota=%s, fecha=%s WHERE id_nota=%s AND activo=TRUE",
+                                (nota.valor, fecha.valor, nota_id),
+                            )
+                            if cursor.rowcount != 1:
+                                raise ValueError("La nota ya no est? activa o no existe.")
+                        elif accion == "corregir_acta":
+                            acta_id = int(request.form.get("id_acta", ""))
+                            fecha = normalizar_fecha(request.form.get("fecha_examen"), campo="fecha_examen", no_futura=True)
+                            estado = request.form.get("estado", "")
+                            libro = request.form.get("libro", "").strip()
+                            folio = request.form.get("folio", "").strip()
+                            nota_texto = request.form.get("nota", "").strip()
+                            if not fecha.valido or estado not in {"APROBADO", "DESAPROBADO", "AUSENTE"} or not libro or len(libro) > 20 or not folio or len(folio) > 20:
+                                raise ValueError("Revise fecha, libro, folio y estado del acta.")
+                            if estado == "AUSENTE":
+                                nota_valor = None
+                            else:
+                                nota_resultado = normalizar_nota(nota_texto)
+                                if not nota_resultado.valido:
+                                    raise ValueError(nota_resultado.errores[0].mensaje)
+                                nota_valor = nota_resultado.valor
+                            cursor.execute(
+                                "UPDATE actas_examen SET fecha_examen=%s, libro=%s, folio=%s, nota=%s, estado=%s "
+                                "WHERE id_acta=%s AND activo=TRUE",
+                                (fecha.valor, libro, folio, nota_valor, estado, acta_id),
+                            )
+                            if cursor.rowcount != 1:
+                                raise ValueError("El acta ya no est? activa o no existe.")
+                        elif accion == "anular_nota":
+                            registro_id = int(request.form.get("id_nota", ""))
+                            cursor.execute("UPDATE notas_cursada SET activo=FALSE WHERE id_nota=%s AND activo=TRUE", (registro_id,))
+                            if cursor.rowcount != 1:
+                                raise ValueError("La nota ya estaba anulada o no existe.")
+                        elif accion == "anular_acta":
+                            registro_id = int(request.form.get("id_acta", ""))
+                            cursor.execute("UPDATE actas_examen SET activo=FALSE WHERE id_acta=%s AND activo=TRUE", (registro_id,))
+                            if cursor.rowcount != 1:
+                                raise ValueError("El acta ya estaba anulada o no existe.")
+                        else:
+                            registro_id = int(request.form.get("id_inscripcion", ""))
+                            cursor.execute("UPDATE inscripciones SET activo=FALSE WHERE id_inscripcion=%s AND activo=TRUE", (registro_id,))
+                            if cursor.rowcount != 1:
+                                raise ValueError("La inscripci?n ya estaba anulada o no existe.")
+                            cursor.execute("CALL sp_auditar('inscripciones','UPDATE',%s,'activo','1','0')", (registro_id,))
+                            while cursor.nextset():
+                                pass
+                        _db().commit()
+                        flash("Registro acad?mico actualizado." if accion in {"actualizar_nota", "corregir_acta"} else "Registro acad?mico anulado.", "success")
+                        return redirect(url_for("cursadas"))
+                    except ValueError as error:
+                        flash(str(error), "error")
+                    except mysql.connector.IntegrityError:
+                        _db().rollback()
+                        flash("No se pudo aplicar el cambio; revise las referencias y restricciones del registro.", "error")
                 elif accion in {"registrar_nota", "registrar_acta"}:
                     if not puede_cargar:
                         abort(403)
@@ -851,7 +1182,7 @@ def create_app(test_config: dict[str, Any] | None = None) -> Flask:
             inscripciones = cursor.fetchall()
             consulta_notas = (
                 "SELECT n.id_nota, n.id_inscripcion, n.instancia, n.nota, n.fecha FROM notas_cursada n "
-                "JOIN inscripciones i ON i.id_inscripcion=n.id_inscripcion WHERE n.activo=TRUE"
+                "JOIN inscripciones i ON i.id_inscripcion=n.id_inscripcion WHERE n.activo=TRUE AND i.activo=TRUE"
             )
             if rol == "DOCENTE":
                 consulta_notas += (
@@ -883,7 +1214,7 @@ def create_app(test_config: dict[str, Any] | None = None) -> Flask:
         return render_template(
             "cursadas.html", materias=materias_opciones, ciclos=ciclos_opciones, mesas=mesas_opciones,
             inscripciones=inscripciones, notas=notas, actas=actas, puede_administrar=puede_administrar,
-            puede_cargar=puede_cargar, rol=rol,
+            puede_cargar=puede_cargar, puede_corregir=rol == "PRECEPTOR", rol=rol,
         )
 
     @app.route("/asistencias", methods=["GET", "POST"])
@@ -1402,7 +1733,7 @@ def create_app(test_config: dict[str, Any] | None = None) -> Flask:
                     consulta_notas = (
                         "SELECT n.instancia, n.nota, n.fecha, ma.codigo, ma.nombre AS materia "
                         "FROM notas_cursada n JOIN inscripciones i ON i.id_inscripcion=n.id_inscripcion "
-                        "JOIN materias ma ON ma.id_materia=i.id_materia WHERE i.id_alumno=%s AND n.activo=TRUE"
+                        "JOIN materias ma ON ma.id_materia=i.id_materia WHERE i.id_alumno=%s AND i.activo=TRUE AND n.activo=TRUE"
                     )
                     if g.usuario["rol"] == "DOCENTE":
                         consulta_notas += " AND EXISTS (SELECT 1 FROM asignaciones_docentes ad WHERE ad.id_docente=%s AND ad.id_materia=i.id_materia AND ad.id_ciclo=i.id_ciclo)"
@@ -1435,6 +1766,10 @@ def create_app(test_config: dict[str, Any] | None = None) -> Flask:
                     alumno["actas"] = actas
                     alumno["promedio_cursada"] = promedio(notas_numericas)
                     alumno["promedio_examenes"] = promedio(actas_numericas)
+                    alumno["promedio_examenes_sin_aplazos"] = promedio([
+                        Decimal(str(a["nota"])) for a in actas
+                        if a["estado"] == "APROBADO" and a["nota"] is not None
+                    ])
                     alumno["promedio_general"] = promedio(todas)
                     resultados.append(alumno)
         finally:
@@ -1476,21 +1811,27 @@ def create_app(test_config: dict[str, Any] | None = None) -> Flask:
                 "SELECT ma.codigo, ma.nombre AS materia, c.anio, x.fecha_clase, x.estado "
                 "FROM asistencias x JOIN inscripciones i ON i.id_inscripcion=x.id_inscripcion "
                 "JOIN materias ma ON ma.id_materia=i.id_materia JOIN ciclos_lectivos c ON c.id_ciclo=i.id_ciclo "
-                "WHERE i.id_alumno=%s AND x.activo=TRUE ORDER BY c.anio, ma.codigo, x.fecha_clase",
+                "WHERE i.id_alumno=%s AND i.activo=TRUE AND x.activo=TRUE ORDER BY c.anio, ma.codigo, x.fecha_clase",
                 (id_alumno,),
             )
             asistencias = cursor.fetchall()
             cursor.execute(
                 "SELECT AVG(n.nota) AS promedio FROM notas_cursada n JOIN inscripciones i ON i.id_inscripcion=n.id_inscripcion "
-                "WHERE i.id_alumno=%s AND n.activo=TRUE",
+                "WHERE i.id_alumno=%s AND i.activo=TRUE AND n.activo=TRUE",
                 (id_alumno,),
             )
             promedio_cursada = cursor.fetchone()["promedio"]
             cursor.execute("SELECT AVG(nota) AS promedio FROM actas_examen WHERE id_alumno=%s AND activo=TRUE", (id_alumno,))
             promedio_examenes = cursor.fetchone()["promedio"]
             cursor.execute(
+                "SELECT AVG(nota) AS promedio FROM actas_examen "
+                "WHERE id_alumno=%s AND activo=TRUE AND estado='APROBADO' AND nota IS NOT NULL",
+                (id_alumno,),
+            )
+            promedio_examenes_sin_aplazos = cursor.fetchone()["promedio"]
+            cursor.execute(
                 "SELECT AVG(nota) AS promedio FROM ("
-                "SELECT n.nota FROM notas_cursada n JOIN inscripciones i ON i.id_inscripcion=n.id_inscripcion WHERE i.id_alumno=%s AND n.activo=TRUE "
+                "SELECT n.nota FROM notas_cursada n JOIN inscripciones i ON i.id_inscripcion=n.id_inscripcion WHERE i.id_alumno=%s AND i.activo=TRUE AND n.activo=TRUE "
                 "UNION ALL SELECT ae.nota FROM actas_examen ae WHERE ae.id_alumno=%s AND ae.activo=TRUE) calificaciones",
                 (id_alumno, id_alumno),
             )
@@ -1522,6 +1863,7 @@ def create_app(test_config: dict[str, Any] | None = None) -> Flask:
                 "alumno": alumno, "matriculas": matriculas, "notas": notas, "actas": actas,
                 "asistencias": asistencias, "resumen_asistencia": resumen_asistencia,
                 "promedio_cursada": promedio_cursada, "promedio_examenes": promedio_examenes,
+                "promedio_examenes_sin_aplazos": promedio_examenes_sin_aplazos,
                 "promedio_general": promedio_general, "minimo_asistencia": minimo,
             }
         finally:
@@ -1551,7 +1893,7 @@ def create_app(test_config: dict[str, Any] | None = None) -> Flask:
             Paragraph(f"<b>Alumno:</b> {escape(alumno['apellido'])}, {escape(alumno['nombre'])}", estilos["Normal"]),
             Paragraph(f"<b>Legajo:</b> {alumno['legajo']} &nbsp;&nbsp; <b>DNI:</b> {escape(alumno['dni'])}", estilos["Normal"]),
             Paragraph(f"<b>Estado:</b> {'Activo' if alumno['activo'] else 'Inactivo'}", estilos["Normal"]),
-            Paragraph(f"<b>Promedio cursada:</b> {datos['promedio_cursada'] or '—'} &nbsp;&nbsp; <b>Promedio exámenes:</b> {datos['promedio_examenes'] or '—'} &nbsp;&nbsp; <b>Combinado:</b> {datos['promedio_general'] or '—'}", estilos["Normal"]),
+            Paragraph(f"<b>Promedio cursada:</b> {datos['promedio_cursada'] or '?'} &nbsp;&nbsp; <b>Promedio examenes con aplazos:</b> {datos['promedio_examenes'] or '?'} &nbsp;&nbsp; <b>Promedio examenes sin aplazos:</b> {datos['promedio_examenes_sin_aplazos'] or '?'} &nbsp;&nbsp; <b>Combinado:</b> {datos['promedio_general'] or '?'}", estilos["Normal"]),
             Spacer(1, 8),
         ]
         elementos.append(Paragraph("Matrículas", estilos["Heading2"]))
@@ -1598,7 +1940,8 @@ def create_app(test_config: dict[str, Any] | None = None) -> Flask:
         resumen.append(["Apellido y nombre", f"{alumno['apellido']}, {alumno['nombre']}"])
         resumen.append(["Estado", "Activo" if alumno["activo"] else "Inactivo"])
         resumen.append(["Promedio cursada", float(datos["promedio_cursada"]) if datos["promedio_cursada"] is not None else None])
-        resumen.append(["Promedio exámenes", float(datos["promedio_examenes"]) if datos["promedio_examenes"] is not None else None])
+        resumen.append(["Promedio examenes (con aplazos)", float(datos["promedio_examenes"]) if datos["promedio_examenes"] is not None else None])
+        resumen.append(["Promedio examenes (sin aplazos)", float(datos["promedio_examenes_sin_aplazos"]) if datos["promedio_examenes_sin_aplazos"] is not None else None])
         resumen.append(["Promedio combinado", float(datos["promedio_general"]) if datos["promedio_general"] is not None else None])
         resumen.append(["Umbral de asistencia", datos["minimo_asistencia"]])
         resumen.append(["Regla de asistencia", "JUSTIFICADO excluido del denominador"])
@@ -1633,6 +1976,188 @@ def create_app(test_config: dict[str, Any] | None = None) -> Flask:
         salida.seek(0)
         return send_file(salida, mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", as_attachment=True, download_name=f"analitico_legajo_{alumno['legajo']}.xlsx")
 
+    def consultar_reportes_academicos(cursor, id_materia: int | None, anio: int | None, limite: bool = True):
+        where_actas = ["ae.activo=TRUE"]
+        params_actas: list[int] = []
+        if id_materia is not None:
+            where_actas.append("ae.id_materia=%s")
+            params_actas.append(id_materia)
+        if anio is not None:
+            where_actas.append("cl.anio=%s")
+            params_actas.append(anio)
+        limite_sql = " LIMIT 1000" if limite else ""
+        cursor.execute(
+            "SELECT ae.id_acta,a.legajo,a.apellido,a.nombre,m.codigo,m.nombre AS materia,"
+            "c.nombre AS carrera,cl.anio,ae.fecha_examen,ae.nota,ae.estado,ae.libro,ae.folio "
+            "FROM actas_examen ae JOIN alumnos a ON a.id_alumno=ae.id_alumno "
+            "JOIN materias m ON m.id_materia=ae.id_materia "
+            "JOIN carreras c ON c.id_carrera=m.id_carrera "
+            "LEFT JOIN mesas_examen mx ON mx.id_mesa=ae.id_mesa "
+            "LEFT JOIN ciclos_lectivos cl ON cl.id_ciclo=mx.id_ciclo "
+            "WHERE " + " AND ".join(where_actas) + " ORDER BY ae.fecha_examen DESC, m.codigo, a.apellido, a.nombre" + limite_sql,
+            tuple(params_actas),
+        )
+        actas = cursor.fetchall()
+
+        where_asistencia = ["i.activo=TRUE"]
+        params_asistencia: list[int] = []
+        if id_materia is not None:
+            where_asistencia.append("m.id_materia=%s")
+            params_asistencia.append(id_materia)
+        if anio is not None:
+            where_asistencia.append("cl.anio=%s")
+            params_asistencia.append(anio)
+        cursor.execute(
+            "SELECT m.id_materia,m.codigo,m.nombre AS materia,ca.nombre AS carrera,cl.anio,"
+            "COUNT(DISTINCT i.id_alumno) AS alumnos,"
+            "SUM(CASE WHEN x.estado='PRESENTE' THEN 1 ELSE 0 END) AS presentes,"
+            "SUM(CASE WHEN x.estado='AUSENTE' THEN 1 ELSE 0 END) AS ausentes,"
+            "SUM(CASE WHEN x.estado='JUSTIFICADO' THEN 1 ELSE 0 END) AS justificadas "
+            "FROM inscripciones i JOIN materias m ON m.id_materia=i.id_materia "
+            "JOIN carreras ca ON ca.id_carrera=m.id_carrera "
+            "JOIN ciclos_lectivos cl ON cl.id_ciclo=i.id_ciclo "
+            "LEFT JOIN asistencias x ON x.id_inscripcion=i.id_inscripcion AND x.activo=TRUE "
+            "WHERE " + " AND ".join(where_asistencia) + " "
+            "GROUP BY m.id_materia,m.codigo,m.nombre,ca.nombre,cl.anio "
+            "ORDER BY cl.anio DESC,ca.nombre,m.codigo",
+            tuple(params_asistencia),
+        )
+        asistencia = cursor.fetchall()
+        for fila in asistencia:
+            fila["presentes"] = int(fila["presentes"] or 0)
+            fila["ausentes"] = int(fila["ausentes"] or 0)
+            fila["justificadas"] = int(fila["justificadas"] or 0)
+            base = fila["presentes"] + fila["ausentes"]
+            fila["porcentaje"] = round(100 * fila["presentes"] / base, 1) if base else None
+        return actas, asistencia
+
+    def preparar_excel_reportes(titulo: str, encabezados: list[str], filas: list[list[Any]], nombre: str):
+        from openpyxl.styles import Font, PatternFill
+        libro = Workbook()
+        hoja = libro.active
+        hoja.title = titulo[:31]
+        hoja.append(encabezados)
+        for fila in filas:
+            hoja.append(fila)
+        hoja.freeze_panes = "A2"
+        hoja.auto_filter.ref = hoja.dimensions
+        for celda in hoja[1]:
+            celda.font = Font(bold=True, color="FFFFFF")
+            celda.fill = PatternFill("solid", fgColor="12345A")
+        for columna in hoja.columns:
+            ancho = min(42, max(12, max((len(str(c.value or "")) for c in columna), default=0) + 2))
+            hoja.column_dimensions[columna[0].column_letter].width = ancho
+        salida = io.BytesIO()
+        libro.save(salida)
+        salida.seek(0)
+        return send_file(salida, mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", as_attachment=True, download_name=nombre)
+
+    def preparar_pdf_reportes(titulo: str, encabezados: list[str], filas: list[list[Any]], nombre: str, anchos: list[float]):
+        from html import escape
+        from reportlab.lib import colors
+        from reportlab.lib.pagesizes import A4, landscape
+        from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
+        from reportlab.lib.units import mm
+        from reportlab.platypus import LongTable, Paragraph, SimpleDocTemplate, Spacer, TableStyle
+
+        salida = io.BytesIO()
+        documento = SimpleDocTemplate(salida, pagesize=landscape(A4), rightMargin=12*mm, leftMargin=12*mm, topMargin=12*mm, bottomMargin=12*mm)
+        estilos = getSampleStyleSheet()
+        estilos.add(ParagraphStyle(name="CeldaReporte", parent=estilos["BodyText"], fontSize=7, leading=8))
+        estilos.add(ParagraphStyle(name="EncabezadoReporte", parent=estilos["BodyText"], fontSize=7, leading=8, textColor=colors.white))
+        tabla = [[Paragraph(escape(str(v)), estilos["EncabezadoReporte"]) for v in encabezados]]
+        tabla += [[Paragraph(escape(str(v if v is not None else "-")), estilos["CeldaReporte"]) for v in fila] for fila in filas]
+        elementos = [Paragraph(escape(titulo), estilos["Title"]), Spacer(1, 5*mm)]
+        elementos.append(LongTable(tabla, colWidths=anchos, repeatRows=1, hAlign="LEFT", style=TableStyle([
+            ("BACKGROUND", (0,0), (-1,0), colors.HexColor("#12345a")),
+            ("GRID", (0,0), (-1,-1), .35, colors.HexColor("#aebdce")),
+            ("VALIGN", (0,0), (-1,-1), "TOP"), ("PADDING", (0,0), (-1,-1), 4),
+        ])))
+        documento.build(elementos)
+        salida.seek(0)
+        return send_file(salida, mimetype="application/pdf", as_attachment=True, download_name=nombre)
+
+    @app.get("/reportes/academicos")
+    @requiere_roles("ADMIN", "PRECEPTOR", "DIRECTIVO")
+    def reportes_academicos():
+        cursor = _cursor()
+        try:
+            materia_texto = request.args.get("materia", "")
+            anio_texto = request.args.get("anio", "")
+            id_materia = int(materia_texto) if materia_texto.isdigit() else None
+            anio = int(anio_texto) if anio_texto.isdigit() else None
+            cursor.execute("SELECT id_materia,codigo,nombre FROM materias WHERE activa=TRUE ORDER BY codigo")
+            materias_reporte = cursor.fetchall()
+            cursor.execute("SELECT id_ciclo,anio FROM ciclos_lectivos ORDER BY anio DESC")
+            ciclos_reporte = cursor.fetchall()
+            actas, asistencia = consultar_reportes_academicos(cursor,id_materia,anio)
+        finally:
+            cursor.close()
+        return render_template("reportes_academicos.html", actas=actas, asistencia=asistencia,
+            materias=materias_reporte, ciclos=ciclos_reporte, materia_seleccionada=id_materia, anio_seleccionado=anio)
+
+    @app.get("/reportes/actas.xlsx")
+    @requiere_roles("ADMIN", "PRECEPTOR", "DIRECTIVO")
+    def exportar_reporte_actas():
+        cursor = _cursor()
+        try:
+            materia_texto=request.args.get("materia", "")
+            anio_texto=request.args.get("anio", "")
+            id_materia=int(materia_texto) if materia_texto.isdigit() else None
+            anio=int(anio_texto) if anio_texto.isdigit() else None
+            actas,_=consultar_reportes_academicos(cursor,id_materia,anio,limite=False)
+        finally:
+            cursor.close()
+        filas=[[r["legajo"],r["apellido"],r["nombre"],r["carrera"],r["codigo"],r["materia"],r["anio"],r["fecha_examen"],float(r["nota"]) if r["nota"] is not None else None,r["estado"],r["libro"],r["folio"]] for r in actas]
+        return preparar_excel_reportes("Listado actas",["Legajo","Apellido","Nombre","Carrera","C?digo","Materia","Ciclo","Fecha","Nota","Estado","Libro","Folio"],filas,"listado_actas.xlsx")
+
+    @app.get("/reportes/actas.pdf")
+    @requiere_roles("ADMIN", "PRECEPTOR", "DIRECTIVO")
+    def exportar_reporte_actas_pdf():
+        from reportlab.lib.units import mm
+        cursor = _cursor()
+        try:
+            materia_texto=request.args.get("materia", "")
+            anio_texto=request.args.get("anio", "")
+            id_materia=int(materia_texto) if materia_texto.isdigit() else None
+            anio=int(anio_texto) if anio_texto.isdigit() else None
+            actas,_=consultar_reportes_academicos(cursor,id_materia,anio,limite=False)
+        finally:
+            cursor.close()
+        filas=[[r["legajo"],f"{r['apellido']}, {r['nombre']}",r["carrera"],f"{r['codigo']} - {r['materia']}",r["anio"] or "Historica",r["fecha_examen"],r["nota"] if r["nota"] is not None else "-",r["estado"],f"{r['libro']}/{r['folio']}"] for r in actas]
+        return preparar_pdf_reportes("Listado de actas",["Legajo","Alumno","Carrera","Materia","Ciclo","Fecha","Nota","Estado","Libro/Folio"],filas,"listado_actas.pdf",[16*mm,37*mm,32*mm,46*mm,18*mm,25*mm,15*mm,22*mm,22*mm])
+
+    @app.get("/reportes/asistencia-materia.xlsx")
+    @requiere_roles("ADMIN", "PRECEPTOR", "DIRECTIVO")
+    def exportar_reporte_asistencia_materia():
+        cursor = _cursor()
+        try:
+            materia_texto=request.args.get("materia", "")
+            anio_texto=request.args.get("anio", "")
+            id_materia=int(materia_texto) if materia_texto.isdigit() else None
+            anio=int(anio_texto) if anio_texto.isdigit() else None
+            _,asistencia=consultar_reportes_academicos(cursor,id_materia,anio)
+        finally:
+            cursor.close()
+        filas=[[r["carrera"],r["codigo"],r["materia"],r["anio"],int(r["alumnos"]),r["presentes"],r["ausentes"],r["justificadas"],r["porcentaje"]] for r in asistencia]
+        return preparar_excel_reportes("Asistencia por materia",["Carrera","C?digo","Materia","Ciclo","Alumnos","Presentes","Ausentes","Justificadas","% asistencia"],filas,"asistencia_por_materia.xlsx")
+
+    @app.get("/reportes/asistencia-materia.pdf")
+    @requiere_roles("ADMIN", "PRECEPTOR", "DIRECTIVO")
+    def exportar_reporte_asistencia_materia_pdf():
+        from reportlab.lib.units import mm
+        cursor = _cursor()
+        try:
+            materia_texto=request.args.get("materia", "")
+            anio_texto=request.args.get("anio", "")
+            id_materia=int(materia_texto) if materia_texto.isdigit() else None
+            anio=int(anio_texto) if anio_texto.isdigit() else None
+            _,asistencia=consultar_reportes_academicos(cursor,id_materia,anio)
+        finally:
+            cursor.close()
+        filas=[[r["carrera"],r["codigo"]+" - "+r["materia"],r["anio"],int(r["alumnos"]),r["presentes"],r["ausentes"],r["justificadas"],f"{r['porcentaje']}%" if r["porcentaje"] is not None else "Sin clases"] for r in asistencia]
+        return preparar_pdf_reportes("Asistencia por materia y ciclo",["Carrera","Materia","Ciclo","Alumnos","Presentes","Ausentes","Justificadas","% asistencia"],filas,"asistencia_por_materia.pdf",[38*mm,57*mm,20*mm,20*mm,23*mm,23*mm,28*mm,26*mm])
+
     @app.get("/reportes/alumnos.xlsx")
     @requiere_roles("ADMIN", "PRECEPTOR", "DIRECTIVO")
     def exportar_reporte_alumnos():
@@ -1655,18 +2180,24 @@ def create_app(test_config: dict[str, Any] | None = None) -> Flask:
             libro = Workbook()
             hoja = libro.active
             hoja.title = "Reporte alumnos"
-            hoja.append(["Legajo", "DNI", "Apellido", "Nombre", "Carreras", "Promedio cursada", "Promedio exámenes", "Promedio combinado", "% asistencia"])
+            hoja.append(["Legajo", "DNI", "Apellido", "Nombre", "Carreras", "Promedio cursada", "Promedio examenes con aplazos", "Promedio examenes sin aplazos", "Promedio combinado", "% asistencia"])
             for alumno in alumnos_reporte:
                 cursor.execute(
                     "SELECT AVG(n.nota) AS promedio FROM notas_cursada n JOIN inscripciones i ON i.id_inscripcion=n.id_inscripcion "
-                    "WHERE i.id_alumno=%s AND n.activo=TRUE",
+                    "WHERE i.id_alumno=%s AND i.activo=TRUE AND n.activo=TRUE",
                     (alumno["id_alumno"],),
                 )
                 promedio_cursada = cursor.fetchone()["promedio"]
                 cursor.execute("SELECT AVG(nota) AS promedio FROM actas_examen WHERE id_alumno=%s AND activo=TRUE", (alumno["id_alumno"],))
                 promedio_examenes = cursor.fetchone()["promedio"]
                 cursor.execute(
-                    "SELECT AVG(nota) AS promedio FROM (SELECT n.nota FROM notas_cursada n JOIN inscripciones i ON i.id_inscripcion=n.id_inscripcion WHERE i.id_alumno=%s AND n.activo=TRUE "
+                    "SELECT AVG(nota) AS promedio FROM actas_examen "
+                    "WHERE id_alumno=%s AND activo=TRUE AND estado='APROBADO' AND nota IS NOT NULL",
+                    (alumno["id_alumno"],),
+                )
+                promedio_examenes_sin_aplazos = cursor.fetchone()["promedio"]
+                cursor.execute(
+                    "SELECT AVG(nota) AS promedio FROM (SELECT n.nota FROM notas_cursada n JOIN inscripciones i ON i.id_inscripcion=n.id_inscripcion WHERE i.id_alumno=%s AND i.activo=TRUE AND n.activo=TRUE "
                     "UNION ALL SELECT nota FROM actas_examen WHERE id_alumno=%s AND activo=TRUE) notas",
                     (alumno["id_alumno"], alumno["id_alumno"]),
                 )
@@ -1686,6 +2217,7 @@ def create_app(test_config: dict[str, Any] | None = None) -> Flask:
                     alumno["legajo"], alumno["dni"], alumno["apellido"], alumno["nombre"], alumno["carreras"],
                     float(promedio_cursada) if promedio_cursada is not None else None,
                     float(promedio_examenes) if promedio_examenes is not None else None,
+                    float(promedio_examenes_sin_aplazos) if promedio_examenes_sin_aplazos is not None else None,
                     float(promedio_general) if promedio_general is not None else None,
                     porcentaje,
                 ])
